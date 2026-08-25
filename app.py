@@ -6,9 +6,8 @@ from datetime import datetime, date
 
 DB = "mindsetu.db"
 
-
 # ============================================================
-# PAGE
+# PAGE SETTINGS
 # ============================================================
 st.set_page_config(
     page_title="MINDSETU NER",
@@ -23,7 +22,6 @@ st.set_page_config(
 def db():
     conn = sqlite3.connect(DB, check_same_thread=False)
 
-    # New users table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS users_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,15 +72,22 @@ def hash_password(password):
 
 
 # ============================================================
-# LOGIN
+# SESSION
 # ============================================================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
+if "page" not in st.session_state:
+    st.session_state.page = "login"
 
+
+# ============================================================
+# LOGIN / REGISTER PAGE
+# ============================================================
 if not st.session_state.logged_in:
 
     st.title("🧠 MINDSETU NER")
+
     st.caption(
         "Personalised AI Cognitive & Memory Companion — prototype"
     )
@@ -92,88 +97,243 @@ if not st.session_state.logged_in:
         "It does not diagnose dementia or replace a medical professional."
     )
 
-    st.subheader("🔐 Login")
+    login_tab, signup_tab = st.tabs([
+        "🔐 Login",
+        "📝 Create Account"
+    ])
 
-    username = st.text_input("Username")
-    password = st.text_input(
-        "Password",
-        type="password"
-    )
+    # ========================================================
+    # LOGIN
+    # ========================================================
+    with login_tab:
 
-    if st.button("Login", type="primary"):
+        st.subheader("🔐 Login")
 
-        # ----------------------------------------------------
-        # ADMIN
-        # ----------------------------------------------------
-        if username.strip().lower() == "durvesh":
+        username = st.text_input(
+            "Username",
+            key="login_username"
+        )
 
-            try:
-                admin_password = st.secrets["ADMIN_PASSWORD"]
-            except Exception:
-                admin_password = None
+        password = st.text_input(
+            "Password",
+            type="password",
+            key="login_password"
+        )
 
-            if admin_password is None:
+        if st.button(
+            "Login",
+            type="primary",
+            key="login_button"
+        ):
 
-                st.error(
-                    "Admin password is not configured yet. "
-                    "We will add it in Streamlit Secrets."
-                )
+            # ------------------------------------------------
+            # ADMIN LOGIN
+            # ------------------------------------------------
+            if username.strip().lower() == "durvesh":
 
-            elif password == admin_password:
+                try:
+                    admin_password = st.secrets[
+                        "ADMIN_PASSWORD"
+                    ]
+                except Exception:
+                    admin_password = None
 
-                st.session_state.logged_in = True
-                st.session_state.user_id = 0
-                st.session_state.name = "Durvesh"
-                st.session_state.role = "admin"
+                if admin_password is None:
 
-                st.rerun()
+                    st.error(
+                        "Admin password is not configured."
+                    )
 
-            else:
-
-                st.error("Incorrect admin password.")
-
-        # ----------------------------------------------------
-        # NORMAL USER
-        # ----------------------------------------------------
-        else:
-
-            user = conn.execute("""
-                SELECT
-                    id,
-                    name,
-                    username,
-                    password_hash,
-                    language,
-                    baseline
-                FROM users_new
-                WHERE LOWER(username)=LOWER(?)
-            """, (
-                username.strip(),
-            )).fetchone()
-
-            if user is None:
-
-                st.error(
-                    "Username not found."
-                )
-
-            else:
-
-                uid, name, uname, saved_hash, language, baseline = user
-
-                if hash_password(password) == saved_hash:
+                elif password == admin_password:
 
                     st.session_state.logged_in = True
-                    st.session_state.user_id = uid
-                    st.session_state.name = name
-                    st.session_state.role = "user"
+                    st.session_state.user_id = 0
+                    st.session_state.name = "Durvesh"
+                    st.session_state.role = "admin"
 
                     st.rerun()
 
                 else:
 
                     st.error(
-                        "Incorrect password."
+                        "Incorrect admin password."
+                    )
+
+            # ------------------------------------------------
+            # NORMAL USER LOGIN
+            # ------------------------------------------------
+            else:
+
+                user = conn.execute("""
+                    SELECT
+                        id,
+                        name,
+                        username,
+                        password_hash,
+                        language,
+                        baseline
+                    FROM users_new
+                    WHERE LOWER(username)=LOWER(?)
+                """, (
+                    username.strip(),
+                )).fetchone()
+
+                if user is None:
+
+                    st.error(
+                        "Username not found. "
+                        "If you are a new user, use "
+                        "'Create Account'."
+                    )
+
+                else:
+
+                    uid, name, uname, saved_hash, language, baseline = user
+
+                    if hash_password(password) == saved_hash:
+
+                        st.session_state.logged_in = True
+                        st.session_state.user_id = uid
+                        st.session_state.name = name
+                        st.session_state.role = "user"
+
+                        st.rerun()
+
+                    else:
+
+                        st.error(
+                            "Incorrect password."
+                        )
+
+
+    # ========================================================
+    # CREATE ACCOUNT
+    # ========================================================
+    with signup_tab:
+
+        st.subheader("📝 Create Your Account")
+
+        st.write(
+            "Anyone with the app link can create an account."
+        )
+
+        new_name = st.text_input(
+            "Your Name",
+            key="signup_name"
+        )
+
+        new_username = st.text_input(
+            "Choose Username",
+            key="signup_username"
+        )
+
+        new_password = st.text_input(
+            "Choose Password",
+            type="password",
+            key="signup_password"
+        )
+
+        confirm_password = st.text_input(
+            "Confirm Password",
+            type="password",
+            key="signup_confirm"
+        )
+
+        language = st.selectbox(
+            "Language",
+            [
+                "English",
+                "Hindi",
+                "Marathi"
+            ],
+            key="signup_language"
+        )
+
+        if st.button(
+            "Create Account",
+            type="primary",
+            key="signup_button"
+        ):
+
+            if not new_name.strip():
+
+                st.error(
+                    "Please enter your name."
+                )
+
+            elif not new_username.strip():
+
+                st.error(
+                    "Please choose a username."
+                )
+
+            elif new_username.strip().lower() == "durvesh":
+
+                st.error(
+                    "That username is reserved."
+                )
+
+            elif not new_password:
+
+                st.error(
+                    "Please create a password."
+                )
+
+            elif len(new_password) < 6:
+
+                st.error(
+                    "Password must contain at least 6 characters."
+                )
+
+            elif new_password != confirm_password:
+
+                st.error(
+                    "Passwords do not match."
+                )
+
+            else:
+
+                existing = conn.execute("""
+                    SELECT id
+                    FROM users_new
+                    WHERE LOWER(username)=LOWER(?)
+                """, (
+                    new_username.strip(),
+                )).fetchone()
+
+                if existing:
+
+                    st.error(
+                        "Username already exists. "
+                        "Please choose another username."
+                    )
+
+                else:
+
+                    conn.execute("""
+                        INSERT INTO users_new(
+                            name,
+                            username,
+                            password_hash,
+                            language,
+                            role
+                        )
+                        VALUES (?, ?, ?, ?, 'user')
+                    """, (
+                        new_name.strip(),
+                        new_username.strip(),
+                        hash_password(new_password),
+                        language
+                    ))
+
+                    conn.commit()
+
+                    st.success(
+                        "✅ Account created successfully!"
+                    )
+
+                    st.info(
+                        "Now go to the Login tab and sign in."
                     )
 
     st.stop()
@@ -204,7 +364,7 @@ with st.sidebar:
 
     else:
 
-        st.info("Normal User")
+        st.info("👤 User")
 
     if st.button("Logout"):
 
@@ -294,11 +454,7 @@ def save_score(
         )
     ))
 
-    baseline = get_baseline(user_id)
-
     conn.commit()
-
-    return baseline
 
 
 def unusual_change(user_id):
@@ -373,7 +529,7 @@ button[kind="primary"] {
 
 
 # ============================================================
-# ADMIN
+# ADMIN DASHBOARD
 # ============================================================
 if role == "admin":
 
@@ -384,17 +540,15 @@ if role == "admin":
     )
 
     st.success(
-        "👑 You are logged in as administrator. "
-        "You can see all users' history."
+        "👑 You are the administrator. "
+        "You can see everyone's history."
     )
 
     tabs = st.tabs([
         "🏠 Home",
         "👥 Users",
-        "📊 All History",
-        "➕ Create User"
+        "📊 All History"
     ])
-
 
     # --------------------------------------------------------
     # ADMIN HOME
@@ -423,17 +577,27 @@ if role == "admin":
             total_sessions
         )
 
+        st.write(
+            "### 👥 Public Registration"
+        )
+
+        st.info(
+            "Anyone who has your app link can create "
+            "their own account from the Create Account tab."
+        )
+
 
     # --------------------------------------------------------
-    # USERS
+    # ALL USERS
     # --------------------------------------------------------
     with tabs[1]:
 
-        st.subheader("👥 Users")
+        st.subheader(
+            "👥 Registered Users"
+        )
 
         users = conn.execute("""
             SELECT
-                id,
                 name,
                 username,
                 language,
@@ -448,20 +612,24 @@ if role == "admin":
 
             for user in users:
 
-                count = conn.execute("""
+                session_count = conn.execute("""
                     SELECT COUNT(*)
                     FROM sessions
-                    WHERE user_id=?
+                    WHERE user_id=(
+                        SELECT id
+                        FROM users_new
+                        WHERE username=?
+                    )
                 """, (
-                    user[0],
+                    user[1],
                 )).fetchone()[0]
 
                 data.append({
-                    "Name": user[1],
-                    "Username": user[2],
-                    "Language": user[3],
-                    "Baseline": user[4],
-                    "Sessions": count
+                    "Name": user[0],
+                    "Username": user[1],
+                    "Language": user[2],
+                    "Baseline": user[3],
+                    "Sessions": session_count
                 })
 
             st.dataframe(
@@ -473,7 +641,7 @@ if role == "admin":
         else:
 
             st.info(
-                "No users created yet."
+                "No users have registered yet."
             )
 
 
@@ -524,104 +692,8 @@ if role == "admin":
         else:
 
             st.info(
-                "No game history available."
+                "No history available yet."
             )
-
-
-    # --------------------------------------------------------
-    # CREATE USER
-    # --------------------------------------------------------
-    with tabs[3]:
-
-        st.subheader(
-            "➕ Create New User"
-        )
-
-        new_name = st.text_input(
-            "Name"
-        )
-
-        new_username = st.text_input(
-            "Username"
-        )
-
-        new_password = st.text_input(
-            "Password",
-            type="password"
-        )
-
-        language = st.selectbox(
-            "Language",
-            [
-                "English",
-                "Hindi",
-                "Marathi"
-            ]
-        )
-
-        if st.button(
-            "Create User",
-            type="primary"
-        ):
-
-            if not new_name.strip():
-
-                st.error(
-                    "Please enter a name."
-                )
-
-            elif not new_username.strip():
-
-                st.error(
-                    "Please enter a username."
-                )
-
-            elif not new_password:
-
-                st.error(
-                    "Please enter a password."
-                )
-
-            else:
-
-                existing = conn.execute("""
-                    SELECT id
-                    FROM users_new
-                    WHERE LOWER(username)=LOWER(?)
-                """, (
-                    new_username.strip(),
-                )).fetchone()
-
-                if existing:
-
-                    st.error(
-                        "Username already exists."
-                    )
-
-                else:
-
-                    conn.execute("""
-                        INSERT INTO users_new(
-                            name,
-                            username,
-                            password_hash,
-                            language
-                        )
-                        VALUES (?, ?, ?, ?)
-                    """, (
-                        new_name.strip(),
-                        new_username.strip(),
-                        hash_password(
-                            new_password
-                        ),
-                        language
-                    ))
-
-                    conn.commit()
-
-                    st.success(
-                        "User created successfully!"
-                    )
 
     st.stop()
 
@@ -657,7 +729,7 @@ difficulty = adaptive_difficulty(uid)
 
 
 # ============================================================
-# USER TABS
+# USER APP
 # ============================================================
 st.title("🧠 MINDSETU NER")
 
@@ -737,7 +809,7 @@ with tabs[0]:
     )
 
     st.caption(
-        "🔒 Your history is private to your account."
+        "🔒 Your history is private and can only be seen by you."
     )
 
 
@@ -754,9 +826,8 @@ with tabs[1]:
         f"Current difficulty: **{difficulty}**"
     )
 
-
     # --------------------------------------------------------
-    # MEMORY SEQUENCE
+    # MEMORY GAME
     # --------------------------------------------------------
     if "sequence" not in st.session_state:
         st.session_state.sequence = None
@@ -800,7 +871,7 @@ with tabs[1]:
 
         st.markdown(
             "### " +
-            "  •  ".join(
+            " • ".join(
                 map(str, seq)
             )
         )
@@ -818,8 +889,10 @@ with tabs[1]:
 
                 user_seq = [
                     int(x)
-                    for x in
-                    answer.replace(",", " ").split()
+                    for x in answer.replace(
+                        ",",
+                        " "
+                    ).split()
                 ]
 
                 correct = sum(
@@ -872,7 +945,7 @@ with tabs[1]:
 
 
     # --------------------------------------------------------
-    # PATTERN
+    # PATTERN GAME
     # --------------------------------------------------------
     st.markdown(
         "#### Pattern Recall"
@@ -1036,9 +1109,7 @@ with tabs[2]:
 
         if status == "Done":
 
-            c3.success(
-                "Done"
-            )
+            c3.success("Done")
 
         else:
 
@@ -1101,7 +1172,7 @@ with tabs[3]:
 
 
 # ============================================================
-# DASHBOARD
+# MY DASHBOARD
 # ============================================================
 with tabs[4]:
 
