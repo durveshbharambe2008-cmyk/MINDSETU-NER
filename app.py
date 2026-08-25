@@ -6,18 +6,30 @@ from datetime import datetime, date
 
 DB = "mindsetu.db"
 
-# -----------------------------
-# Database
-# -----------------------------
+
+# ============================================================
+# PAGE
+# ============================================================
+st.set_page_config(
+    page_title="MINDSETU NER",
+    page_icon="🧠",
+    layout="wide"
+)
+
+
+# ============================================================
+# DATABASE
+# ============================================================
 def db():
     conn = sqlite3.connect(DB, check_same_thread=False)
 
+    # New users table
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE IF NOT EXISTS users_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            username TEXT UNIQUE,
-            password TEXT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
             language TEXT DEFAULT 'English',
             baseline REAL DEFAULT 0,
             role TEXT DEFAULT 'user'
@@ -52,29 +64,28 @@ def db():
 conn = db()
 
 
-# -----------------------------
-# Password helper
-# -----------------------------
+# ============================================================
+# PASSWORD
+# ============================================================
 def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+    return hashlib.sha256(
+        password.encode("utf-8")
+    ).hexdigest()
 
 
-# -----------------------------
-# Login
-# -----------------------------
+# ============================================================
+# LOGIN
+# ============================================================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
+
 if not st.session_state.logged_in:
 
-    st.set_page_config(
-        page_title="MINDSETU NER",
-        page_icon="🧠",
-        layout="wide"
-    )
-
     st.title("🧠 MINDSETU NER")
-    st.caption("Personalised AI Cognitive & Memory Companion")
+    st.caption(
+        "Personalised AI Cognitive & Memory Companion — prototype"
+    )
 
     st.info(
         "This is a wellness/support prototype. "
@@ -84,125 +95,185 @@ if not st.session_state.logged_in:
     st.subheader("🔐 Login")
 
     username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
+    password = st.text_input(
+        "Password",
+        type="password"
+    )
 
     if st.button("Login", type="primary"):
 
-        # ADMIN LOGIN
+        # ----------------------------------------------------
+        # ADMIN
+        # ----------------------------------------------------
         if username.strip().lower() == "durvesh":
 
-            if password == "Durvesh@2008":
+            try:
+                admin_password = st.secrets["ADMIN_PASSWORD"]
+            except Exception:
+                admin_password = None
+
+            if admin_password is None:
+
+                st.error(
+                    "Admin password is not configured yet. "
+                    "We will add it in Streamlit Secrets."
+                )
+
+            elif password == admin_password:
 
                 st.session_state.logged_in = True
                 st.session_state.user_id = 0
                 st.session_state.name = "Durvesh"
                 st.session_state.role = "admin"
 
-                st.success("Admin login successful!")
                 st.rerun()
 
             else:
-                st.error("Wrong admin password.")
 
-        # NORMAL USER LOGIN
+                st.error("Incorrect admin password.")
+
+        # ----------------------------------------------------
+        # NORMAL USER
+        # ----------------------------------------------------
         else:
 
             user = conn.execute("""
-                SELECT id, name, username, password, language, baseline
-                FROM users
+                SELECT
+                    id,
+                    name,
+                    username,
+                    password_hash,
+                    language,
+                    baseline
+                FROM users_new
                 WHERE LOWER(username)=LOWER(?)
-            """, (username.strip(),)).fetchone()
+            """, (
+                username.strip(),
+            )).fetchone()
 
-            if user:
+            if user is None:
 
-                uid, name, uname, saved_password, language, baseline = user
+                st.error(
+                    "Username not found."
+                )
 
-                if saved_password and hash_password(password) == saved_password:
+            else:
+
+                uid, name, uname, saved_hash, language, baseline = user
+
+                if hash_password(password) == saved_hash:
 
                     st.session_state.logged_in = True
                     st.session_state.user_id = uid
                     st.session_state.name = name
                     st.session_state.role = "user"
 
-                    st.success("Login successful!")
                     st.rerun()
 
                 else:
-                    st.error("Wrong password.")
 
-            else:
-                st.error("Username not found.")
+                    st.error(
+                        "Incorrect password."
+                    )
 
     st.stop()
 
 
-# -----------------------------
-# Current user
-# -----------------------------
+# ============================================================
+# CURRENT USER
+# ============================================================
 uid = st.session_state.user_id
 name = st.session_state.name
 role = st.session_state.role
 
 
-# -----------------------------
-# Logout
-# -----------------------------
+# ============================================================
+# SIDEBAR
+# ============================================================
 with st.sidebar:
 
-    st.write(f"👤 **{name}**")
+    st.header("Account")
+
+    st.write(
+        f"👤 **{name}**"
+    )
 
     if role == "admin":
-        st.success("👑 Admin")
+
+        st.success("👑 Administrator")
+
     else:
-        st.info("User")
+
+        st.info("Normal User")
 
     if st.button("Logout"):
-        st.session_state.logged_in = False
-        st.session_state.user_id = None
-        st.session_state.name = None
-        st.session_state.role = None
+
+        st.session_state.clear()
         st.rerun()
 
 
-# -----------------------------
-# Helpers
-# -----------------------------
-def get_sessions(uid):
+# ============================================================
+# HELPERS
+# ============================================================
+def get_sessions(user_id):
+
     return conn.execute("""
-        SELECT game, score, difficulty, created_at
+        SELECT
+            game,
+            score,
+            difficulty,
+            created_at
         FROM sessions
         WHERE user_id=?
         ORDER BY id DESC
-    """, (uid,)).fetchall()
+    """, (
+        user_id,
+    )).fetchall()
 
 
-def get_baseline(uid):
+def get_baseline(user_id):
+
     rows = conn.execute("""
-        SELECT score FROM sessions
+        SELECT score
+        FROM sessions
         WHERE user_id=?
-        ORDER BY id DESC LIMIT 10
-    """, (uid,)).fetchall()
+        ORDER BY id DESC
+        LIMIT 10
+    """, (
+        user_id,
+    )).fetchall()
 
     if not rows:
         return 0.0
 
-    return round(sum(r[0] for r in rows) / len(rows), 1)
+    return round(
+        sum(float(r[0]) for r in rows) / len(rows),
+        1
+    )
 
 
-def adaptive_difficulty(uid):
-    baseline = get_baseline(uid)
+def adaptive_difficulty(user_id):
+
+    baseline = get_baseline(user_id)
 
     if baseline == 0:
         return 1
+
     if baseline >= 85:
         return 3
+
     if baseline >= 65:
         return 2
 
     return 1
 
 
-def save_score(uid, game, score, difficulty):
+def save_score(
+    user_id,
+    game,
+    score,
+    difficulty
+):
 
     conn.execute("""
         INSERT INTO sessions(
@@ -214,71 +285,91 @@ def save_score(uid, game, score, difficulty):
         )
         VALUES (?, ?, ?, ?, ?)
     """, (
-        uid,
+        user_id,
         game,
         score,
         difficulty,
-        datetime.now().isoformat(timespec="seconds")
+        datetime.now().isoformat(
+            timespec="seconds"
+        )
     ))
 
-    conn.execute(
-        "UPDATE users SET baseline=? WHERE id=?",
-        (get_baseline(uid), uid)
-    )
+    baseline = get_baseline(user_id)
 
     conn.commit()
 
+    return baseline
 
-def unusual_change(uid):
+
+def unusual_change(user_id):
+
+    rows = conn.execute("""
+        SELECT score
+        FROM sessions
+        WHERE user_id=?
+        ORDER BY id DESC
+    """, (
+        user_id,
+    )).fetchall()
 
     scores = [
-        r[1]
-        for r in get_sessions(uid)
+        float(r[0])
+        for r in rows
     ]
 
     if len(scores) < 5:
-        return False, "Not enough history yet."
+
+        return (
+            False,
+            "Not enough history yet."
+        )
 
     recent = sum(scores[:3]) / 3
-    older = sum(scores[3:6]) / max(1, len(scores[3:6]))
+
+    older_scores = scores[3:6]
+
+    older = (
+        sum(older_scores) /
+        len(older_scores)
+    )
 
     if older >= 1 and recent < older * 0.75:
 
-        return True, (
-            "Recent performance is noticeably lower "
-            "than the user's recent baseline. "
+        return (
+            True,
+            "Recent performance is noticeably "
+            "lower than the user's recent baseline. "
             "Caregiver review is recommended."
         )
 
-    return False, "No major change detected."
+    return (
+        False,
+        "No major change detected."
+    )
 
 
-# -----------------------------
-# UI
-# -----------------------------
-st.set_page_config(
-    page_title="MINDSETU NER",
-    page_icon="🧠",
-    layout="wide"
-)
-
+# ============================================================
+# STYLE
+# ============================================================
 st.markdown("""
 <style>
-.main {background:#07121f;}
-h1,h2,h3 {color:#34d399;}
-div[data-testid="stMetricValue"] {color:#38bdf8;}
-button[kind="primary"] {background:#34d399;}
-.small-note {color:#a6b9c9;font-size:13px;}
+.main {
+    background:#07121f;
+}
+
+h1,h2,h3 {
+    color:#34d399;
+}
+
+div[data-testid="stMetricValue"] {
+    color:#38bdf8;
+}
+
+button[kind="primary"] {
+    background:#34d399;
+}
 </style>
 """, unsafe_allow_html=True)
-
-st.title("🧠 MINDSETU NER")
-st.caption("Personalised AI Cognitive & Memory Companion — prototype")
-
-st.info(
-    "This is a wellness/support prototype. "
-    "It does not diagnose dementia or replace a medical professional."
-)
 
 
 # ============================================================
@@ -286,47 +377,68 @@ st.info(
 # ============================================================
 if role == "admin":
 
+    st.title("🧠 MINDSETU NER")
+
+    st.caption(
+        "Administrator Dashboard"
+    )
+
+    st.success(
+        "👑 You are logged in as administrator. "
+        "You can see all users' history."
+    )
+
     tabs = st.tabs([
-        "🏠 Admin Home",
+        "🏠 Home",
         "👥 Users",
         "📊 All History",
         "➕ Create User"
     ])
 
-    # -----------------------------
-    # Admin Home
-    # -----------------------------
+
+    # --------------------------------------------------------
+    # ADMIN HOME
+    # --------------------------------------------------------
     with tabs[0]:
 
-        st.subheader("👑 Admin Dashboard")
+        total_users = conn.execute("""
+            SELECT COUNT(*)
+            FROM users_new
+        """).fetchone()[0]
 
-        total_users = conn.execute(
-            "SELECT COUNT(*) FROM users"
-        ).fetchone()[0]
-
-        total_sessions = conn.execute(
-            "SELECT COUNT(*) FROM sessions"
-        ).fetchone()[0]
+        total_sessions = conn.execute("""
+            SELECT COUNT(*)
+            FROM sessions
+        """).fetchone()[0]
 
         c1, c2 = st.columns(2)
 
-        c1.metric("Total Users", total_users)
-        c2.metric("Total Sessions", total_sessions)
-
-        st.success(
-            "You are the administrator. You can see all users' history."
+        c1.metric(
+            "Total Users",
+            total_users
         )
 
-    # -----------------------------
-    # Users
-    # -----------------------------
+        c2.metric(
+            "Total Sessions",
+            total_sessions
+        )
+
+
+    # --------------------------------------------------------
+    # USERS
+    # --------------------------------------------------------
     with tabs[1]:
 
         st.subheader("👥 Users")
 
         users = conn.execute("""
-            SELECT id, name, username, language, baseline
-            FROM users
+            SELECT
+                id,
+                name,
+                username,
+                language,
+                baseline
+            FROM users_new
             ORDER BY name
         """).fetchall()
 
@@ -334,19 +446,21 @@ if role == "admin":
 
             data = []
 
-            for u in users:
+            for user in users:
 
                 count = conn.execute("""
                     SELECT COUNT(*)
                     FROM sessions
                     WHERE user_id=?
-                """, (u[0],)).fetchone()[0]
+                """, (
+                    user[0],
+                )).fetchone()[0]
 
                 data.append({
-                    "Name": u[1],
-                    "Username": u[2],
-                    "Language": u[3],
-                    "Baseline": u[4],
+                    "Name": user[1],
+                    "Username": user[2],
+                    "Language": user[3],
+                    "Baseline": user[4],
                     "Sessions": count
                 })
 
@@ -357,26 +471,32 @@ if role == "admin":
             )
 
         else:
-            st.info("No users created yet.")
 
-    # -----------------------------
+            st.info(
+                "No users created yet."
+            )
+
+
+    # --------------------------------------------------------
     # ALL HISTORY
-    # -----------------------------
+    # --------------------------------------------------------
     with tabs[2]:
 
-        st.subheader("📊 All Users History")
+        st.subheader(
+            "📊 All Users History"
+        )
 
         history = conn.execute("""
             SELECT
-                users.name,
-                users.username,
+                users_new.name,
+                users_new.username,
                 sessions.game,
                 sessions.score,
                 sessions.difficulty,
                 sessions.created_at
             FROM sessions
-            JOIN users
-            ON sessions.user_id = users.id
+            JOIN users_new
+            ON sessions.user_id = users_new.id
             ORDER BY sessions.id DESC
         """).fetchall()
 
@@ -402,17 +522,29 @@ if role == "admin":
             )
 
         else:
-            st.info("No history available.")
 
-    # -----------------------------
+            st.info(
+                "No game history available."
+            )
+
+
+    # --------------------------------------------------------
     # CREATE USER
-    # -----------------------------
+    # --------------------------------------------------------
     with tabs[3]:
 
-        st.subheader("➕ Create New User")
+        st.subheader(
+            "➕ Create New User"
+        )
 
-        new_name = st.text_input("Name")
-        new_username = st.text_input("Username")
+        new_name = st.text_input(
+            "Name"
+        )
+
+        new_username = st.text_input(
+            "Username"
+        )
+
         new_password = st.text_input(
             "Password",
             type="password"
@@ -420,7 +552,11 @@ if role == "admin":
 
         language = st.selectbox(
             "Language",
-            ["English", "Hindi", "Marathi"]
+            [
+                "English",
+                "Hindi",
+                "Marathi"
+            ]
         )
 
         if st.button(
@@ -429,42 +565,55 @@ if role == "admin":
         ):
 
             if not new_name.strip():
-                st.error("Enter the user's name.")
+
+                st.error(
+                    "Please enter a name."
+                )
 
             elif not new_username.strip():
-                st.error("Enter a username.")
+
+                st.error(
+                    "Please enter a username."
+                )
 
             elif not new_password:
-                st.error("Enter a password.")
+
+                st.error(
+                    "Please enter a password."
+                )
 
             else:
 
                 existing = conn.execute("""
                     SELECT id
-                    FROM users
+                    FROM users_new
                     WHERE LOWER(username)=LOWER(?)
-                """, (new_username.strip(),)).fetchone()
+                """, (
+                    new_username.strip(),
+                )).fetchone()
 
                 if existing:
 
                     st.error(
-                        "That username already exists."
+                        "Username already exists."
                     )
 
                 else:
 
                     conn.execute("""
-                        INSERT INTO users(
+                        INSERT INTO users_new(
                             name,
                             username,
-                            password,
+                            password_hash,
                             language
                         )
                         VALUES (?, ?, ?, ?)
                     """, (
                         new_name.strip(),
                         new_username.strip(),
-                        hash_password(new_password),
+                        hash_password(
+                            new_password
+                        ),
                         language
                     ))
 
@@ -480,17 +629,27 @@ if role == "admin":
 # ============================================================
 # NORMAL USER
 # ============================================================
-
 user = conn.execute("""
-    SELECT id, name, language, baseline
-    FROM users
+    SELECT
+        id,
+        name,
+        language,
+        baseline
+    FROM users_new
     WHERE id=?
-""", (uid,)).fetchone()
+""", (
+    uid,
+)).fetchone()
+
 
 if user is None:
 
-    st.error("User account not found.")
+    st.error(
+        "User account not found."
+    )
+
     st.stop()
+
 
 uid, name, lang, baseline = user
 
@@ -500,6 +659,18 @@ difficulty = adaptive_difficulty(uid)
 # ============================================================
 # USER TABS
 # ============================================================
+st.title("🧠 MINDSETU NER")
+
+st.caption(
+    "Personalised AI Cognitive & Memory Companion — prototype"
+)
+
+st.info(
+    "This is a wellness/support prototype. "
+    "It does not diagnose dementia or replace a medical professional."
+)
+
+
 tabs = st.tabs([
     "🏠 Home",
     "🎮 Cognitive Games",
@@ -509,9 +680,9 @@ tabs = st.tabs([
 ])
 
 
-# -----------------------------
+# ============================================================
 # HOME
-# -----------------------------
+# ============================================================
 with tabs[0]:
 
     st.subheader(
@@ -527,52 +698,75 @@ with tabs[0]:
 
     c2.metric(
         "Current Difficulty",
-        str(difficulty)
+        difficulty
     )
 
     c3.metric(
         "Sessions",
-        str(len(get_sessions(uid)))
+        len(get_sessions(uid))
     )
 
     changed, message = unusual_change(uid)
 
     if changed:
-        st.warning("⚠️ " + message)
-    else:
-        st.success("✅ " + message)
 
-    st.write("### Today's plan")
-    st.write("1. 5-minute memory activity")
-    st.write("2. Daily reminder check")
-    st.write("3. Optional caregiver review")
+        st.warning(
+            "⚠️ " + message
+        )
+
+    else:
+
+        st.success(
+            "✅ " + message
+        )
+
+    st.write(
+        "### Today's plan"
+    )
+
+    st.write(
+        "1. 5-minute memory activity"
+    )
+
+    st.write(
+        "2. Daily reminder check"
+    )
+
+    st.write(
+        "3. Optional caregiver review"
+    )
 
     st.caption(
-        "🔒 Your history is private and can only be seen by you."
+        "🔒 Your history is private to your account."
     )
 
 
 # ============================================================
-# COGNITIVE GAMES
+# GAMES
 # ============================================================
 with tabs[1]:
 
-    st.subheader("🎮 Adaptive Cognitive Games")
+    st.subheader(
+        "🎮 Adaptive Cognitive Games"
+    )
 
     st.write(
         f"Current difficulty: **{difficulty}**"
     )
 
+
+    # --------------------------------------------------------
+    # MEMORY SEQUENCE
+    # --------------------------------------------------------
     if "sequence" not in st.session_state:
         st.session_state.sequence = None
 
     if "game_started" not in st.session_state:
         st.session_state.game_started = False
 
-    # -----------------------------
-    # Memory Sequence
-    # -----------------------------
-    st.markdown("#### Memory Sequence")
+    st.markdown(
+        "#### Memory Sequence"
+    )
 
     length = {
         1: 4,
@@ -587,12 +781,11 @@ with tabs[1]:
             type="primary"
         ):
 
-            seq = random.sample(
+            st.session_state.sequence = random.sample(
                 range(1, 10),
                 length
             )
 
-            st.session_state.sequence = seq
             st.session_state.game_started = True
 
             st.rerun()
@@ -612,39 +805,46 @@ with tabs[1]:
             )
         )
 
-        st.write(
-            "After memorising it, enter the numbers in the same order."
-        )
-
         answer = st.text_input(
             "Your answer",
             placeholder="Example: 3 8 1 7"
         )
 
-        if st.button("Submit Answer"):
+        if st.button(
+            "Submit Answer"
+        ):
 
             try:
 
                 user_seq = [
                     int(x)
-                    for x in answer.replace(",", " ").split()
+                    for x in
+                    answer.replace(",", " ").split()
                 ]
 
                 correct = sum(
                     a == b
-                    for a, b in zip(seq, user_seq)
+                    for a, b in zip(
+                        seq,
+                        user_seq
+                    )
                 )
 
                 score = round(
-                    100 * correct / max(len(seq), 1),
+                    100 *
+                    correct /
+                    max(len(seq), 1),
                     1
                 )
 
                 if user_seq == seq:
+
                     st.success(
                         f"Excellent! Score: {score}"
                     )
+
                 else:
+
                     st.warning(
                         f"Good attempt. Score: {score}"
                     )
@@ -667,17 +867,23 @@ with tabs[1]:
                     "Please enter numbers separated by spaces."
                 )
 
+
     st.divider()
 
-    # -----------------------------
-    # Pattern
-    # -----------------------------
-    st.markdown("#### Pattern Recall")
+
+    # --------------------------------------------------------
+    # PATTERN
+    # --------------------------------------------------------
+    st.markdown(
+        "#### Pattern Recall"
+    )
 
     if "pattern" not in st.session_state:
         st.session_state.pattern = None
 
-    if st.button("Generate Pattern"):
+    if st.button(
+        "Generate Pattern"
+    ):
 
         size = {
             1: 3,
@@ -694,7 +900,9 @@ with tabs[1]:
 
     if pattern:
 
-        st.write("Remember:")
+        st.write(
+            "Remember:"
+        )
 
         st.markdown(
             "### " +
@@ -706,7 +914,9 @@ with tabs[1]:
             key="pattern_input"
         )
 
-        if st.button("Check Pattern"):
+        if st.button(
+            "Check Pattern"
+        ):
 
             entered = user_pattern.split()
 
@@ -714,7 +924,10 @@ with tabs[1]:
                 100 *
                 sum(
                     a == b
-                    for a, b in zip(pattern, entered)
+                    for a, b in zip(
+                        pattern,
+                        entered
+                    )
                 )
                 /
                 max(len(pattern), 1),
@@ -755,7 +968,9 @@ with tabs[2]:
         placeholder="Drink water"
     )
 
-    rtime = st.time_input("Time")
+    rtime = st.time_input(
+        "Time"
+    )
 
     if st.button(
         "Add Reminder",
@@ -791,14 +1006,24 @@ with tabs[2]:
 
             st.rerun()
 
+
     rows = conn.execute("""
-        SELECT id, title, due_time, status
+        SELECT
+            id,
+            title,
+            due_time,
+            status
         FROM reminders
         WHERE user_id=?
         ORDER BY due_time
-    """, (uid,)).fetchall()
+    """, (
+        uid,
+    )).fetchall()
 
-    st.write("### Your reminders")
+
+    st.write(
+        "### Your reminders"
+    )
 
     for rid, title, due, status in rows:
 
@@ -811,7 +1036,9 @@ with tabs[2]:
 
         if status == "Done":
 
-            c3.success("Done")
+            c3.success(
+                "Done"
+            )
 
         else:
 
@@ -840,10 +1067,12 @@ with tabs[2]:
 # ============================================================
 with tabs[3]:
 
-    st.subheader("📜 My History")
+    st.subheader(
+        "📜 My History"
+    )
 
     st.success(
-        "🔒 Only your own history is displayed here."
+        "🔒 Only your own history is shown here."
     )
 
     sessions = get_sessions(uid)
@@ -872,7 +1101,7 @@ with tabs[3]:
 
 
 # ============================================================
-# MY DASHBOARD
+# DASHBOARD
 # ============================================================
 with tabs[4]:
 
@@ -930,7 +1159,8 @@ with tabs[4]:
     else:
 
         st.info(
-            "Complete a few cognitive sessions to populate the dashboard."
+            "Complete a few cognitive sessions "
+            "to populate the dashboard."
         )
 
     st.caption(
