@@ -15,7 +15,6 @@ st.set_page_config(
     layout="wide"
 )
 
-
 # ============================================================
 # DATABASE
 # ============================================================
@@ -61,7 +60,6 @@ def db():
 
 conn = db()
 
-
 # ============================================================
 # PASSWORD
 # ============================================================
@@ -77,12 +75,172 @@ def hash_password(password):
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
-if "page" not in st.session_state:
-    st.session_state.page = "login"
+
+# ============================================================
+# VOICE COMMAND WIDGET
+# ============================================================
+def voice_command():
+
+    html = """
+    <div style="
+        padding:15px;
+        border-radius:15px;
+        background:linear-gradient(135deg,#fff8e7,#f5ead0);
+        border:1px solid #e2c58b;
+        text-align:center;
+        margin-bottom:15px;
+    ">
+
+        <div style="
+            font-size:22px;
+            font-weight:bold;
+            color:#8B4513;
+            margin-bottom:8px;
+        ">
+            🎤 Voice Command
+        </div>
+
+        <div style="
+            color:#555;
+            font-size:14px;
+            margin-bottom:12px;
+        ">
+            Speak a command such as:
+            <br>
+            <b>"Open games"</b> |
+            <b>"Show my history"</b> |
+            <b>"Open reminders"</b>
+        </div>
+
+        <button id="voiceButton" style="
+            background:#D97732;
+            color:white;
+            border:none;
+            padding:12px 25px;
+            border-radius:10px;
+            font-size:17px;
+            cursor:pointer;
+        ">
+            🎤 Start Speaking
+        </button>
+
+        <div id="voiceStatus" style="
+            margin-top:12px;
+            color:#555;
+            font-size:14px;
+        ">
+            Press the button and speak.
+        </div>
+
+        <div id="voiceResult" style="
+            margin-top:8px;
+            font-size:16px;
+            font-weight:bold;
+            color:#166534;
+        ">
+        </div>
+
+    </div>
+
+    <script>
+
+    const button = document.getElementById("voiceButton");
+    const status = document.getElementById("voiceStatus");
+    const result = document.getElementById("voiceResult");
+
+    const SpeechRecognition =
+        window.SpeechRecognition ||
+        window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+
+        button.disabled = true;
+
+        status.innerText =
+            "Voice recognition is not supported by this browser.";
+
+    } else {
+
+        const recognition = new SpeechRecognition();
+
+        recognition.continuous = false;
+        recognition.interimResults = false;
+
+        // English voice recognition
+        recognition.lang = "en-IN";
+
+        button.addEventListener("click", function() {
+
+            result.innerText = "";
+
+            status.innerText =
+                "🎙️ Listening... Please speak.";
+
+            try {
+                recognition.start();
+            } catch (error) {
+                console.log(error);
+            }
+
+        });
+
+
+        recognition.onresult = function(event) {
+
+            const transcript =
+                event.results[0][0].transcript;
+
+            result.innerText =
+                "You said: " + transcript;
+
+            status.innerText =
+                "✅ Voice captured.";
+
+            // Send voice command to Streamlit page
+            window.parent.postMessage(
+                {
+                    type: "MINDSETU_VOICE_COMMAND",
+                    command: transcript
+                },
+                "*"
+            );
+        };
+
+
+        recognition.onerror = function(event) {
+
+            status.innerText =
+                "❌ Microphone error: " + event.error;
+
+        };
+
+
+        recognition.onend = function() {
+
+            if (
+                status.innerText.includes("Listening")
+            ) {
+
+                status.innerText =
+                    "Voice recognition ended.";
+
+            }
+
+        };
+
+    }
+
+    </script>
+    """
+
+    st.html(
+        html,
+        unsafe_allow_javascript=True
+    )
 
 
 # ============================================================
-# LOGIN / REGISTER PAGE
+# LOGIN / REGISTRATION
 # ============================================================
 if not st.session_state.logged_in:
 
@@ -126,9 +284,7 @@ if not st.session_state.logged_in:
             key="login_button"
         ):
 
-            # ------------------------------------------------
-            # ADMIN LOGIN
-            # ------------------------------------------------
+            # ADMIN
             if username.strip().lower() == "durvesh":
 
                 try:
@@ -159,9 +315,7 @@ if not st.session_state.logged_in:
                         "Incorrect admin password."
                     )
 
-            # ------------------------------------------------
-            # NORMAL USER LOGIN
-            # ------------------------------------------------
+            # NORMAL USER
             else:
 
                 user = conn.execute("""
@@ -182,8 +336,7 @@ if not st.session_state.logged_in:
 
                     st.error(
                         "Username not found. "
-                        "If you are a new user, use "
-                        "'Create Account'."
+                        "If you are new, use Create Account."
                     )
 
                 else:
@@ -304,8 +457,7 @@ if not st.session_state.logged_in:
                 if existing:
 
                     st.error(
-                        "Username already exists. "
-                        "Please choose another username."
+                        "Username already exists."
                     )
 
                 else:
@@ -333,7 +485,7 @@ if not st.session_state.logged_in:
                     )
 
                     st.info(
-                        "Now go to the Login tab and sign in."
+                        "Go to Login and sign in."
                     )
 
     st.stop()
@@ -505,31 +657,54 @@ def unusual_change(user_id):
 
 
 # ============================================================
-# STYLE
+# NORTH INDIAN INSPIRED STYLE
 # ============================================================
 st.markdown("""
 <style>
-.main {
-    background:#07121f;
+
+.stApp {
+    background:
+        radial-gradient(
+            circle at 10% 20%,
+            rgba(244,166,66,0.18),
+            transparent 120px
+        ),
+        radial-gradient(
+            circle at 90% 80%,
+            rgba(34,139,94,0.15),
+            transparent 150px
+        ),
+        #FFF8E7;
 }
 
-h1,h2,h3 {
-    color:#34d399;
+h1, h2, h3 {
+    color:#8B4513 !important;
 }
 
-div[data-testid="stMetricValue"] {
-    color:#38bdf8;
+div[data-testid="stMetric"] {
+    background:rgba(255,255,255,0.85);
+    border-radius:15px;
+    padding:15px;
+    border:1px solid rgba(198,98,35,0.15);
 }
 
-button[kind="primary"] {
-    background:#34d399;
+.stButton > button {
+    background-color:#D97732;
+    color:white;
+    border-radius:10px;
+    border:none;
 }
+
+.stButton > button:hover {
+    background-color:#B85C20;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
 
 # ============================================================
-# ADMIN DASHBOARD
+# ADMIN
 # ============================================================
 if role == "admin":
 
@@ -544,15 +719,20 @@ if role == "admin":
         "You can see everyone's history."
     )
 
+    # Voice command available for admin too
+    st.subheader("🎤 Voice Commands")
+    voice_command()
+
+    st.caption(
+        "Try: 'show all history' or 'show users'."
+    )
+
     tabs = st.tabs([
         "🏠 Home",
         "👥 Users",
         "📊 All History"
     ])
 
-    # --------------------------------------------------------
-    # ADMIN HOME
-    # --------------------------------------------------------
     with tabs[0]:
 
         total_users = conn.execute("""
@@ -577,19 +757,10 @@ if role == "admin":
             total_sessions
         )
 
-        st.write(
-            "### 👥 Public Registration"
-        )
-
         st.info(
-            "Anyone who has your app link can create "
-            "their own account from the Create Account tab."
+            "Anyone with the app link can create an account."
         )
 
-
-    # --------------------------------------------------------
-    # ALL USERS
-    # --------------------------------------------------------
     with tabs[1]:
 
         st.subheader(
@@ -641,13 +812,9 @@ if role == "admin":
         else:
 
             st.info(
-                "No users have registered yet."
+                "No users registered yet."
             )
 
-
-    # --------------------------------------------------------
-    # ALL HISTORY
-    # --------------------------------------------------------
     with tabs[2]:
 
         st.subheader(
@@ -729,7 +896,7 @@ difficulty = adaptive_difficulty(uid)
 
 
 # ============================================================
-# USER APP
+# MAIN USER APP
 # ============================================================
 st.title("🧠 MINDSETU NER")
 
@@ -743,6 +910,26 @@ st.info(
 )
 
 
+# ============================================================
+# VOICE COMMANDS
+# ============================================================
+st.subheader("🎤 Voice Commands")
+
+voice_command()
+
+st.caption(
+    "Try saying: "
+    "\"open games\", "
+    "\"show my history\", "
+    "\"open reminders\", "
+    "or "
+    "\"go home\"."
+)
+
+
+# ============================================================
+# TABS
+# ============================================================
 tabs = st.tabs([
     "🏠 Home",
     "🎮 Cognitive Games",
@@ -826,9 +1013,7 @@ with tabs[1]:
         f"Current difficulty: **{difficulty}**"
     )
 
-    # --------------------------------------------------------
-    # MEMORY GAME
-    # --------------------------------------------------------
+    # MEMORY
     if "sequence" not in st.session_state:
         st.session_state.sequence = None
 
@@ -940,13 +1125,9 @@ with tabs[1]:
                     "Please enter numbers separated by spaces."
                 )
 
-
     st.divider()
 
-
-    # --------------------------------------------------------
-    # PATTERN GAME
-    # --------------------------------------------------------
+    # PATTERN
     st.markdown(
         "#### Pattern Recall"
     )
@@ -1032,10 +1213,6 @@ with tabs[2]:
         "⏰ Daily Routine & Reminders"
     )
 
-    st.write(
-        "Add medicine, hydration, appointment or activity reminders."
-    )
-
     rtitle = st.text_input(
         "Reminder title",
         placeholder="Drink water"
@@ -1079,7 +1256,6 @@ with tabs[2]:
 
             st.rerun()
 
-
     rows = conn.execute("""
         SELECT
             id,
@@ -1092,7 +1268,6 @@ with tabs[2]:
     """, (
         uid,
     )).fetchall()
-
 
     st.write(
         "### Your reminders"
@@ -1134,7 +1309,7 @@ with tabs[2]:
 
 
 # ============================================================
-# MY HISTORY
+# HISTORY
 # ============================================================
 with tabs[3]:
 
@@ -1172,7 +1347,7 @@ with tabs[3]:
 
 
 # ============================================================
-# MY DASHBOARD
+# DASHBOARD
 # ============================================================
 with tabs[4]:
 
