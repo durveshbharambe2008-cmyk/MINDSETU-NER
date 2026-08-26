@@ -707,40 +707,41 @@ def recognize_voice(
     audio_bytes,
     language
 ):
-
     if sr is None:
-        return None
-
+        return None, "SpeechRecognition package is not installed."
     if not audio_bytes:
-        return None
-
+        return None, "No audio was recorded. Please speak after starting the microphone."
     try:
-
         recognizer = sr.Recognizer()
-
-        with sr.AudioFile(
-            io.BytesIO(audio_bytes)
-        ) as source:
-
-            audio = recognizer.record(
-                source
-            )
-
-        speech_language = LANGUAGES.get(
-            language,
-            LANGUAGES["English"]
-        )["speech"]
-
-        command = recognizer.recognize_google(
-            audio,
-            language=speech_language
-        )
-
-        return command.lower().strip()
-
-    except Exception:
-
-        return None
+        recognizer.dynamic_energy_threshold = True
+        recognizer.energy_threshold = 250
+        recognizer.pause_threshold = 0.8
+        recognizer.phrase_threshold = 0.2
+        recognizer.non_speaking_duration = 0.5
+        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+            try:
+                recognizer.adjust_for_ambient_noise(source, duration=0.25)
+            except Exception:
+                pass
+            audio = recognizer.record(source)
+        primary_language = LANGUAGES.get(language, LANGUAGES["English"])["speech"]
+        languages_to_try = [primary_language]
+        english_language = LANGUAGES["English"]["speech"]
+        if primary_language != english_language:
+            languages_to_try.append(english_language)
+        for speech_language in languages_to_try:
+            try:
+                command = recognizer.recognize_google(audio, language=speech_language)
+                command = re.sub(r"\s+", " ", command.lower().strip())
+                if command:
+                    return command, None
+            except sr.UnknownValueError:
+                continue
+            except sr.RequestError:
+                return None, "Speech recognition service is unavailable. Check your internet connection."
+        return None, "I could not clearly understand your speech. Please speak louder and more slowly."
+    except Exception as exc:
+        return None, f"Voice input failed. Check microphone permission. ({type(exc).__name__})"
 
 
 # ============================================================
@@ -2497,6 +2498,31 @@ def game_result_voice(
 
 
 # ============================================================
+# VOICE COMMAND HELPERS
+# ============================================================
+VOICE_ALIASES = {
+    "logout": ["logout", "log out", "exit", "sign out", "लॉगआउट", "लॉग आउट", "выйти", "выход"],
+    "games": ["game", "games", "play", "cognitive", "cognitive game", "खेल", "गेम", "खेळ", "игра", "игры"],
+    "reminders": ["reminder", "reminders", "set reminder", "add reminder", "remind me", "रिमाइंडर", "स्मरणपत्र", "напоминание", "напоминания"],
+    "reports": ["report", "reports", "open report", "open reports", "रिपोर्ट", "अहवाल", "отчёт", "отчет", "отчеты"],
+    "history": ["history", "performance", "my history", "मेरा इतिहास", "इतिहास", "माझा इतिहास", "история"],
+    "details": ["details", "profile", "my data", "my details", "मेरी जानकारी", "माहिती", "мои данные", "профиль"],
+    "home": ["home", "dashboard", "go home", "main page", "होम", "मुख्यपृष्ठ", "домой", "главная"]
+}
+
+def clean_voice_command(command):
+    if not command:
+        return ""
+    command = command.lower().strip()
+    command = re.sub(r"[^\w\s:/.-]", " ", command, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", command).strip()
+
+def command_matches(command, action):
+    command = clean_voice_command(command)
+    return any(command == alias or alias in command for alias in VOICE_ALIASES.get(action, []))
+
+
+# ============================================================
 # PATIENT SIDEBAR
 # ============================================================
 
@@ -2594,16 +2620,18 @@ with st.sidebar:
 
     else:
 
+        st.caption("Click 🎤, speak clearly, then click ⏹️ to stop.")
+
         audio_data = mic_recorder(
-            start_prompt="🎤",
-            stop_prompt="⏹️",
+            start_prompt="🎤 Start Listening",
+            stop_prompt="⏹️ Stop Listening",
             just_once=True,
             key="patient_voice_recorder"
         )
 
         if audio_data:
 
-            command = recognize_voice(
+            command, voice_error = recognize_voice(
                 audio_data["bytes"],
                 language
             )
@@ -2620,15 +2648,14 @@ with st.sidebar:
 
             if command:
 
+                st.caption(f'🎤 I heard: "{command}"')
+                command = clean_voice_command(command)
+
                 # =================================================
                 # LOGOUT
                 # =================================================
 
-                if (
-                    "logout" in command
-                    or "log out" in command
-                    or "exit" in command
-                ):
+                if command_matches(command, "logout"):
 
                     queue_voice(
                         "Logging out now.",
@@ -2643,12 +2670,7 @@ with st.sidebar:
                 # GAMES
                 # =================================================
 
-                elif (
-                    "game" in command
-                    or "games" in command
-                    or "play" in command
-                    or "cognitive" in command
-                ):
+                elif command_matches(command, "games"):
 
                     st.session_state.page = "games"
 
@@ -2666,13 +2688,7 @@ with st.sidebar:
                 # REMINDERS
                 # =================================================
 
-                elif (
-                    "reminder" in command
-                    or "reminders" in command
-                    or "remind me" in command
-                    or "set time" in command
-                    or "set a time" in command
-                ):
+                elif command_matches(command, "reminders") or "set time" in command or "set a time" in command:
 
                     reminder_time = (
                         parse_time_from_command(
@@ -2744,10 +2760,7 @@ with st.sidebar:
                 # REPORTS
                 # =================================================
 
-                elif (
-                    "report" in command
-                    or "reports" in command
-                ):
+                elif command_matches(command, "reports"):
 
                     st.session_state.page = "reports"
 
@@ -2762,10 +2775,7 @@ with st.sidebar:
                 # HISTORY
                 # =================================================
 
-                elif (
-                    "history" in command
-                    or "performance" in command
-                ):
+                elif command_matches(command, "history"):
 
                     st.session_state.page = "history"
 
@@ -2780,11 +2790,7 @@ with st.sidebar:
                 # DETAILS
                 # =================================================
 
-                elif (
-                    "details" in command
-                    or "profile" in command
-                    or "my data" in command
-                ):
+                elif command_matches(command, "details"):
 
                     st.session_state.page = "details"
 
@@ -2799,10 +2805,7 @@ with st.sidebar:
                 # HOME
                 # =================================================
 
-                elif (
-                    "home" in command
-                    or "dashboard" in command
-                ):
+                elif command_matches(command, "home"):
 
                     st.session_state.page = "home"
 
@@ -2837,6 +2840,9 @@ with st.sidebar:
                     st.rerun()
 
             else:
+
+                if voice_error:
+                    st.warning(f"🎤 {voice_error}")
 
                 queue_voice(
                     (
