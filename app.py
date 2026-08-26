@@ -33,7 +33,7 @@
 #
 # INSTALL:
 #
-# pip install streamlit gTTS SpeechRecognition streamlit-mic-recorder
+# pip install streamlit gTTS SpeechRecognition streamlit-mic-recorder reportlab
 #
 # RUN:
 #
@@ -51,6 +51,26 @@ import base64
 import textwrap
 
 from datetime import datetime, date, time
+from uuid import uuid4
+
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        SimpleDocTemplate,
+        Paragraph,
+        Spacer,
+        Table,
+        TableStyle,
+        PageBreak,
+        KeepTogether,
+    )
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
 
 
 # ============================================================
@@ -86,6 +106,516 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+
+
+# ============================================================
+# CLINICAL-STYLE PROGRESS REPORT PDF
+# ============================================================
+
+REPORT_GREEN = colors.HexColor("#005B4F") if REPORTLAB_AVAILABLE else None
+REPORT_DARK = colors.HexColor("#253047") if REPORTLAB_AVAILABLE else None
+REPORT_LIGHT = colors.HexColor("#F4F7FA") if REPORTLAB_AVAILABLE else None
+REPORT_BORDER = colors.HexColor("#D9E2EC") if REPORTLAB_AVAILABLE else None
+REPORT_TEAL = colors.HexColor("#00A67A") if REPORTLAB_AVAILABLE else None
+
+
+def safe_pdf_text(value):
+    """Keep generated PDFs readable and avoid accidental unsupported glyphs."""
+    if value is None:
+        return "Not provided"
+    return str(value).replace("–", "-").replace("—", "-")
+
+
+def build_patient_progress_pdf(patient_id):
+    """
+    Build a clinical-report-inspired PDF using only data available in the app.
+    This intentionally does NOT claim medical verification, diagnosis, ISO, or HL7 compliance.
+    Returns PDF bytes, or None when ReportLab is unavailable.
+    """
+    if not REPORTLAB_AVAILABLE:
+        return None
+
+    patient = conn.execute(
+        """
+        SELECT
+            id,
+            name,
+            username,
+            language,
+            baseline,
+            role,
+            doctor_id,
+            adaptive_difficulty
+        FROM users
+        WHERE id=?
+        AND role='patient'
+        """,
+        (patient_id,)
+    ).fetchone()
+
+    if not patient:
+        return None
+
+    sessions = conn.execute(
+        """
+        SELECT
+            game,
+            score,
+            difficulty,
+            created_at
+        FROM sessions
+        WHERE user_id=?
+        ORDER BY id ASC
+        """,
+        (patient_id,)
+    ).fetchall()
+
+    reminders = conn.execute(
+        """
+        SELECT
+            title,
+            due_time,
+            status
+        FROM reminders
+        WHERE user_id=?
+        ORDER BY due_time ASC
+        LIMIT 12
+        """,
+        (patient_id,)
+    ).fetchall()
+
+    doctor_name = "Not assigned"
+    if patient[6]:
+        doctor = conn.execute(
+            """
+            SELECT name
+            FROM users
+            WHERE id=?
+            AND role='doctor'
+            """,
+            (patient[6],)
+        ).fetchone()
+        if doctor:
+            doctor_name = f"Dr. {doctor[0]}"
+
+    total_sessions = len(sessions)
+    scores = [float(row[1]) for row in sessions]
+    mean_accuracy = round(sum(scores) / len(scores), 1) if scores else 0.0
+    best_score = max(scores) if scores else 0.0
+    mean_latency = "Not available"
+
+    # Group sessions into a compact cognitive-assessment table.
+    grouped = {}
+    for game, score, diff, created_at in sessions:
+        key = safe_pdf_text(game)
+        item = grouped.setdefault(
+            key,
+            {"count": 0, "scores": [], "difficulty": [], "dates": []}
+        )
+        item["count"] += 1
+        item["scores"].append(float(score))
+        item["difficulty"].append(int(diff or 1))
+        item["dates"].append(created_at)
+
+    buffer = io.BytesIO()
+
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=16 * mm,
+        leftMargin=16 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+        title="MINDSETU NER Cognitive Progress Report",
+        author="MINDSETU NER",
+    )
+
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(
+        name="ReportTitle",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=16,
+        leading=19,
+        textColor=colors.white,
+        spaceAfter=3,
+    ))
+    styles.add(ParagraphStyle(
+        name="ReportSubtitle",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8.5,
+        leading=11,
+        textColor=colors.white,
+    ))
+    styles.add(ParagraphStyle(
+        name="Section",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=10.5,
+        leading=13,
+        textColor=REPORT_DARK,
+        spaceBefore=7,
+        spaceAfter=5,
+    ))
+    styles.add(ParagraphStyle(
+        name="Small",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=9.5,
+        textColor=colors.HexColor("#5C6670"),
+    ))
+    styles.add(ParagraphStyle(
+        name="BodySmall",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=10,
+        textColor=colors.HexColor("#4D5560"),
+    ))
+    styles.add(ParagraphStyle(
+        name="MetricLabel",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=6.5,
+        leading=8,
+        textColor=colors.HexColor("#61708A"),
+    ))
+    styles.add(ParagraphStyle(
+        name="MetricValue",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=14,
+        leading=16,
+        textColor=REPORT_GREEN,
+    ))
+    styles.add(ParagraphStyle(
+        name="MetricSub",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=6,
+        leading=7,
+        textColor=colors.HexColor("#718096"),
+    ))
+
+    story = []
+
+    # Header matching the reference report's visual hierarchy.
+    header_table = Table([
+        [
+            [
+                Paragraph("MINDSETU NER COGNITIVE HEALTH PLATFORM", styles["ReportTitle"]),
+                Paragraph("Cognitive wellness and longitudinal performance report", styles["ReportSubtitle"]),
+                Paragraph("Clinical-style summary generated from application data", styles["ReportSubtitle"]),
+            ],
+            [
+                Paragraph("<b>APPLICATION REPORT</b><br/><font size='7'>Not a medical diagnosis or verified medical record</font>", styles["BodySmall"])
+            ]
+        ]],
+        colWidths=[150 * mm, 0],
+    )
+
+    # Use a simpler two-column header to avoid unsupported nested widths.
+    header_table = Table([
+        [
+            [
+                Paragraph("MINDSETU NER COGNITIVE HEALTH PLATFORM", styles["ReportTitle"]),
+                Paragraph("Cognitive wellness and longitudinal performance report", styles["ReportSubtitle"]),
+                Paragraph("Clinical-style summary generated from application data", styles["ReportSubtitle"]),
+            ],
+            Paragraph("<b>APPLICATION REPORT</b><br/><font size='7'>Not a medical diagnosis</font>", styles["BodySmall"]),
+        ]
+    ], colWidths=[135 * mm, 40 * mm])
+    header_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), REPORT_GREEN),
+        ("BOX", (0, 0), (-1, -1), 0, REPORT_GREEN),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ("TEXTCOLOR", (1, 0), (1, 0), colors.white),
+        ("BACKGROUND", (1, 0), (1, 0), colors.white),
+        ("BOX", (1, 0), (1, 0), 0.6, colors.white),
+    ]))
+    story.append(header_table)
+    story.append(Spacer(1, 7 * mm))
+
+    report_id = f"MNE-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6].upper()}"
+    generated_at = datetime.now().strftime("%d %b %Y %H:%M:%S")
+
+    meta_table = Table([
+        [
+            Paragraph("<b>COGNITIVE PROGRESS SUMMARY</b>", styles["BodySmall"]),
+        ],
+        [
+            Paragraph(
+                f"Report ID: {safe_pdf_text(report_id)} &nbsp;&nbsp;|&nbsp;&nbsp; "
+                f"Generated: {safe_pdf_text(generated_at)} &nbsp;&nbsp;|&nbsp;&nbsp; "
+                f"App User: {safe_pdf_text(patient[2])}",
+                styles["Small"]
+            )
+        ]
+    ], colWidths=[175 * mm])
+    meta_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7FAFC")),
+        ("BOX", (0, 0), (-1, -1), 0.6, REPORT_BORDER),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(meta_table)
+
+    def section_title(number, title):
+        table = Table([["", Paragraph(f"{number}. {title}", styles["Section"])]], colWidths=[5 * mm, 170 * mm])
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (0, 0), REPORT_TEAL),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        return table
+
+    # Section 1 - Profile.
+    story.append(section_title(1, "PATIENT PROFILE & APPLICATION DETAILS"))
+    profile_data = [
+        [Paragraph("<b>Patient Name:</b>", styles["BodySmall"]), safe_pdf_text(patient[1]), Paragraph("<b>Username:</b>", styles["BodySmall"]), safe_pdf_text(patient[2])],
+        [Paragraph("<b>Role:</b>", styles["BodySmall"]), safe_pdf_text(patient[5].title()), Paragraph("<b>Language:</b>", styles["BodySmall"]), safe_pdf_text(patient[3])],
+        [Paragraph("<b>Personal Baseline:</b>", styles["BodySmall"]), f"{float(patient[4] or 0):.1f}", Paragraph("<b>Adaptive Difficulty:</b>", styles["BodySmall"]), str(int(patient[7] or 1))],
+        [Paragraph("<b>Assigned Doctor:</b>", styles["BodySmall"]), safe_pdf_text(doctor_name), Paragraph("<b>Clinical Fields:</b>", styles["BodySmall"]), "Not provided by this app"],
+    ]
+    profile_table = Table(profile_data, colWidths=[36 * mm, 52 * mm, 38 * mm, 49 * mm])
+    profile_table.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F5F8FA")),
+        ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#F5F8FA")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("FONTNAME", (1, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (1, 0), (-1, -1), 7.5),
+        ("TEXTCOLOR", (1, 0), (-1, -1), colors.HexColor("#4D5560")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(profile_table)
+    story.append(5 * mm * 1)
+
+    # Section 2 - Metrics.
+    story.append(section_title(2, "LONGITUDINAL COGNITIVE METRICS & PERFORMANCE INDICES"))
+    metric_values = [
+        ("TOTAL SESSIONS", str(total_sessions), "Evaluated runs"),
+        ("MEAN SCORE", f"{mean_accuracy:.0f}%", "Average game score"),
+        ("BEST SCORE", f"{best_score:.0f}", "Highest recorded score"),
+        ("ADAPTIVE LEVEL", str(int(patient[7] or 1)), "Current difficulty"),
+    ]
+    metric_cells = []
+    for label, value, sub in metric_values:
+        metric_cells.append([
+            Paragraph(label, styles["MetricLabel"]),
+            Paragraph(value, styles["MetricValue"]),
+            Paragraph(sub, styles["MetricSub"]),
+        ])
+    metric_table = Table([metric_cells], colWidths=[43.5 * mm] * 4)
+    metric_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FBFC")),
+        ("BOX", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    story.append(metric_table)
+    story.append(3 * mm)
+
+    assessment_rows = [[
+        Paragraph("<b>Cognitive Assessment</b>", styles["BodySmall"]),
+        Paragraph("<b>Sessions</b>", styles["BodySmall"]),
+        Paragraph("<b>Mean Score</b>", styles["BodySmall"]),
+        Paragraph("<b>Difficulty</b>", styles["BodySmall"]),
+        Paragraph("<b>Application Interpretation</b>", styles["BodySmall"]),
+    ]]
+    for game, info in grouped.items():
+        avg = sum(info["scores"]) / len(info["scores"])
+        avg_diff = round(sum(info["difficulty"]) / len(info["difficulty"]))
+        interpretation = (
+            "Strong performance recorded."
+            if avg >= 70 else
+            "Performance may benefit from continued practice."
+        )
+        assessment_rows.append([
+            Paragraph(safe_pdf_text(game), styles["BodySmall"]),
+            str(info["count"]),
+            f"{avg:.0f}%",
+            str(avg_diff),
+            Paragraph(interpretation, styles["BodySmall"]),
+        ])
+
+    if len(assessment_rows) == 1:
+        assessment_rows.append([
+            "No sessions recorded", "0", "0%", str(int(patient[7] or 1)),
+            Paragraph("No cognitive sessions are available yet.", styles["BodySmall"])
+        ])
+
+    assessment_table = Table(
+        assessment_rows,
+        colWidths=[54 * mm, 20 * mm, 25 * mm, 25 * mm, 51 * mm],
+        repeatRows=1,
+    )
+    assessment_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), REPORT_GREEN),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (1, 1), (3, -1), "CENTER"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(assessment_table)
+
+    # Section 3 - reminders/care schedule. We use reminders rather than claiming medications.
+    story.append(5 * mm * 1)
+    story.append(section_title(3, "REMINDER & CARE SCHEDULE"))
+    reminder_rows = [[
+        Paragraph("<b>Time</b>", styles["BodySmall"]),
+        Paragraph("<b>Reminder</b>", styles["BodySmall"]),
+        Paragraph("<b>Status</b>", styles["BodySmall"]),
+    ]]
+    for title, due_time, status in reminders:
+        reminder_rows.append([
+            safe_pdf_text(due_time),
+            Paragraph(safe_pdf_text(title), styles["BodySmall"]),
+            safe_pdf_text(status),
+        ])
+    if len(reminder_rows) == 1:
+        reminder_rows.append([
+            "-",
+            Paragraph("No reminders scheduled.", styles["BodySmall"]),
+            "-",
+        ])
+    reminder_table = Table(reminder_rows, colWidths=[32 * mm, 92 * mm, 51 * mm], repeatRows=1)
+    reminder_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), REPORT_DARK),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(reminder_table)
+
+    story.append(PageBreak())
+
+    # Section 4 - full session audit.
+    story.append(section_title(4, "GAME-BY-GAME SESSION AUDIT LOG"))
+    audit_rows = [[
+        Paragraph("#", styles["BodySmall"]),
+        Paragraph("Date & Time", styles["BodySmall"]),
+        Paragraph("Cognitive Assessment", styles["BodySmall"]),
+        Paragraph("Difficulty", styles["BodySmall"]),
+        Paragraph("Score", styles["BodySmall"]),
+        Paragraph("Status", styles["BodySmall"]),
+    ]]
+    for idx, (game, score, diff, created_at) in enumerate(sessions, start=1):
+        status = "Optimal" if float(score) >= 70 else "Attention"
+        audit_rows.append([
+            str(idx),
+            safe_pdf_text(created_at),
+            Paragraph(safe_pdf_text(game), styles["BodySmall"]),
+            str(int(diff or 1)),
+            f"{float(score):.0f}/100",
+            status,
+        ])
+    if len(audit_rows) == 1:
+        audit_rows.append(["-", "-", "No sessions recorded", "-", "-", "-"])
+
+    audit_table = Table(
+        audit_rows,
+        colWidths=[9 * mm, 34 * mm, 62 * mm, 21 * mm, 23 * mm, 26 * mm],
+        repeatRows=1,
+    )
+    audit_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), REPORT_DARK),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (0, 1), (0, -1), "CENTER"),
+        ("ALIGN", (3, 1), (5, -1), "CENTER"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(audit_table)
+
+    story.append(5 * mm)
+    story.append(section_title(5, "PERFORMANCE SUMMARY & APP GUIDANCE"))
+
+    if total_sessions:
+        guidance = (
+            f"The application recorded {total_sessions} cognitive session(s) with a mean score of "
+            f"{mean_accuracy:.1f}/100 and a best score of {best_score:.0f}/100. "
+            f"The current adaptive difficulty is level {int(patient[7] or 1)}. "
+            "Continue structured cognitive practice and use reminders as configured in the app."
+        )
+    else:
+        guidance = (
+            "No cognitive sessions have been recorded yet. Start a cognitive game to begin "
+            "building the longitudinal performance history."
+        )
+
+    guidance_table = Table([
+        [Paragraph(guidance, styles["BodySmall"])]
+    ], colWidths=[175 * mm])
+    guidance_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7FAFC")),
+        ("BOX", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    story.append(guidance_table)
+
+    story.append(7 * mm)
+    footer_table = Table([
+        [
+            Paragraph("MINDSETU NER", styles["BodySmall"]),
+            Paragraph(
+                "Generated from application data. For demonstration and educational purposes only. "
+                "This report does not provide a medical diagnosis.",
+                styles["Small"]
+            ),
+        ]
+    ], colWidths=[40 * mm, 135 * mm])
+    footer_table.setStyle(TableStyle([
+        ("LINEABOVE", (0, 0), (-1, 0), 0.5, REPORT_BORDER),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(footer_table)
+
+    def draw_page(canvas, doc_obj):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 6.5)
+        canvas.setFillColor(colors.HexColor("#718096"))
+        canvas.drawString(16 * mm, 8 * mm, "MINDSETU NER | Cognitive Progress Report")
+        canvas.drawRightString(194 * mm, 8 * mm, f"Page {doc_obj.page}")
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=draw_page, onLaterPages=draw_page)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 # ============================================================
 # DATABASE
@@ -3932,6 +4462,52 @@ elif selected_page == "reports":
         )
     )
 
+    # ------------------------------------------------------------
+    # CLINICAL-STYLE APPLICATION REPORT
+    # ------------------------------------------------------------
+
+    st.subheader("🧾 Cognitive Progress Report")
+    st.caption(
+        "This report uses the same sectioned, professional visual style as the "
+        "reference document, but only includes data available in MINDSETU NER."
+    )
+
+    if REPORTLAB_AVAILABLE:
+
+        clinical_pdf = build_patient_progress_pdf(
+            user_id
+        )
+
+        if clinical_pdf:
+            st.download_button(
+                "⬇️ Download Cognitive Progress Report PDF",
+                data=clinical_pdf,
+                file_name=(
+                    f"MINDSETU_NER_Cognitive_Report_"
+                    f"{username}.pdf"
+                ),
+                mime="application/pdf",
+                use_container_width=True
+            )
+
+            st.success(
+                "Report generated successfully. "
+                "The PDF contains your profile, longitudinal metrics, "
+                "game performance, reminders, and session audit log."
+            )
+
+    else:
+        st.warning(
+            "PDF generation requires ReportLab. "
+            "Install it with: pip install reportlab"
+        )
+
+    st.divider()
+
+    # ------------------------------------------------------------
+    # DOCTOR REPORTS ALREADY SENT TO THE PATIENT
+    # ------------------------------------------------------------
+
     reports = conn.execute(
         """
         SELECT
@@ -3962,6 +4538,8 @@ elif selected_page == "reports":
 
     else:
 
+        st.subheader("📨 Reports Sent by Doctor")
+
         for report in reports:
 
             with st.expander(
@@ -3982,10 +4560,6 @@ elif selected_page == "reports":
                     "🔊 Listen to Report",
                     key=f"listen_report_{report[0]}"
                 ):
-
-                    # Voice only.
-                    # NO st.audio()
-                    # NO success message.
 
                     queue_voice(
                         report[2],
