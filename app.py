@@ -1,3 +1,41 @@
+# ============================================================
+# MINDSETU NER - COMPLETE CORRECTED STREAMLIT PROTOTYPE
+# ============================================================
+#
+# Features:
+# 1. Patient / Doctor / Admin roles
+# 2. Patient registration and login
+# 3. Admin dashboard
+# 4. Admin can add doctors
+# 5. Admin can assign patients to doctors
+# 6. Doctor can see assigned patients only
+# 7. Doctor cannot access games
+# 8. Patient can access cognitive games
+# 9. Memory Sequence Game
+# 10. Pattern Memory Game
+# 11. Reaction / Attention Game
+# 12. Adaptive difficulty
+# 13. Personal history
+# 14. Personal baseline
+# 15. Reminders
+# 16. Doctor performance reports
+# 17. Patient can view reports
+# 18. Patient can listen to reports
+# 19. Voice welcome after login
+# 20. Voice confirmation after actions
+# 21. Voice commands
+# 22. Multilingual voice output
+# 23. Multilingual voice recognition
+# 24. Multilingual UI labels
+# 25. Patient can see only own information
+# 26. Admin can see all information
+#
+# Run:
+#     pip install streamlit gTTS SpeechRecognition streamlit-mic-recorder
+#     streamlit run app.py
+#
+# ============================================================
+
 import streamlit as st
 import sqlite3
 import random
@@ -6,6 +44,7 @@ import io
 import re
 from datetime import datetime, date, time
 
+# Optional packages
 try:
     from gtts import gTTS
 except ImportError:
@@ -23,59 +62,27 @@ except ImportError:
 
 
 # ============================================================
-# MINDSETU NER
+# PAGE CONFIG
 # ============================================================
-
-DB = "mindsetu.db"
 
 st.set_page_config(
     page_title="MINDSETU NER",
     page_icon="🧠",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
-
-
-# ============================================================
-# LANGUAGES
-# ============================================================
-
-LANGUAGES = {
-    "English": "en",
-    "Hindi": "hi",
-    "Marathi": "mr",
-    "Bengali": "bn",
-    "Gujarati": "gu",
-    "Tamil": "ta",
-    "Telugu": "te",
-    "Kannada": "kn",
-    "Malayalam": "ml",
-    "Punjabi": "pa",
-    "Urdu": "ur",
-    "Odia": "or",
-    "Assamese": "as",
-    "Nepali": "ne",
-    "French": "fr",
-    "Spanish": "es",
-    "German": "de",
-    "Italian": "it",
-    "Portuguese": "pt",
-    "Arabic": "ar",
-    "Chinese": "zh-CN",
-    "Japanese": "ja",
-    "Korean": "ko",
-    "Russian": "ru",
-    "Turkish": "tr"
-}
 
 
 # ============================================================
 # DATABASE
 # ============================================================
 
-def get_db():
+DB_NAME = "mindsetu_ner.db"
 
+
+def get_connection():
     connection = sqlite3.connect(
-        DB,
+        DB_NAME,
         check_same_thread=False
     )
 
@@ -95,20 +102,20 @@ def get_db():
     connection.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            game TEXT,
-            score REAL,
-            difficulty INTEGER,
-            created_at TEXT
+            user_id INTEGER NOT NULL,
+            game TEXT NOT NULL,
+            score REAL NOT NULL,
+            difficulty INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL
         )
     """)
 
     connection.execute("""
         CREATE TABLE IF NOT EXISTS reminders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            title TEXT,
-            due_time TEXT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            due_time TEXT NOT NULL,
             status TEXT DEFAULT 'Pending'
         )
     """)
@@ -116,11 +123,11 @@ def get_db():
     connection.execute("""
         CREATE TABLE IF NOT EXISTS reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            patient_id INTEGER,
-            doctor_id INTEGER,
-            title TEXT,
-            report_text TEXT,
-            created_at TEXT,
+            patient_id INTEGER NOT NULL,
+            doctor_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            report_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
             status TEXT DEFAULT 'Sent'
         )
     """)
@@ -130,7 +137,323 @@ def get_db():
     return connection
 
 
-conn = get_db()
+conn = get_connection()
+
+
+# ============================================================
+# LANGUAGE SETTINGS
+# ============================================================
+
+LANGUAGES = {
+    "English": {
+        "code": "en",
+        "speech": "en-IN"
+    },
+    "Hindi": {
+        "code": "hi",
+        "speech": "hi-IN"
+    },
+    "Marathi": {
+        "code": "mr",
+        "speech": "mr-IN"
+    },
+    "Bengali": {
+        "code": "bn",
+        "speech": "bn-IN"
+    },
+    "Gujarati": {
+        "code": "gu",
+        "speech": "gu-IN"
+    },
+    "Tamil": {
+        "code": "ta",
+        "speech": "ta-IN"
+    },
+    "Telugu": {
+        "code": "te",
+        "speech": "te-IN"
+    },
+    "Kannada": {
+        "code": "kn",
+        "speech": "kn-IN"
+    },
+    "Malayalam": {
+        "code": "ml",
+        "speech": "ml-IN"
+    },
+    "Punjabi": {
+        "code": "pa",
+        "speech": "pa-IN"
+    },
+    "Urdu": {
+        "code": "ur",
+        "speech": "ur-PK"
+    },
+    "Nepali": {
+        "code": "ne",
+        "speech": "ne-NP"
+    },
+    "French": {
+        "code": "fr",
+        "speech": "fr-FR"
+    },
+    "Spanish": {
+        "code": "es",
+        "speech": "es-ES"
+    },
+    "German": {
+        "code": "de",
+        "speech": "de-DE"
+    },
+    "Italian": {
+        "code": "it",
+        "speech": "it-IT"
+    },
+    "Portuguese": {
+        "code": "pt",
+        "speech": "pt-PT"
+    },
+    "Arabic": {
+        "code": "ar",
+        "speech": "ar-SA"
+    },
+    "Chinese": {
+        "code": "zh-CN",
+        "speech": "zh-CN"
+    },
+    "Japanese": {
+        "code": "ja",
+        "speech": "ja-JP"
+    },
+    "Korean": {
+        "code": "ko",
+        "speech": "ko-KR"
+    },
+    "Russian": {
+        "code": "ru",
+        "speech": "ru-RU"
+    },
+    "Turkish": {
+        "code": "tr",
+        "speech": "tr-TR"
+    }
+}
+
+
+# ============================================================
+# UI TRANSLATIONS
+# ============================================================
+
+TRANSLATIONS = {
+
+    "English": {
+        "home": "Home",
+        "games": "Cognitive Games",
+        "reminders": "Reminders",
+        "history": "My History",
+        "details": "My Details",
+        "reports": "Reports",
+        "logout": "Logout",
+        "welcome": "Welcome",
+        "language": "Language",
+        "save": "Save",
+        "add": "Add",
+        "delete": "Delete",
+        "submit": "Submit",
+        "start": "Start",
+        "score": "Score",
+        "difficulty": "Difficulty",
+        "doctor": "Doctor",
+        "patient": "Patient",
+        "admin": "Administrator",
+        "send_report": "Send Report",
+        "select_patient": "Select Patient",
+        "no_reports": "No reports available.",
+        "no_history": "No game history available.",
+        "success": "Success"
+    },
+
+    "Hindi": {
+        "home": "होम",
+        "games": "संज्ञानात्मक खेल",
+        "reminders": "रिमाइंडर",
+        "history": "मेरा इतिहास",
+        "details": "मेरी जानकारी",
+        "reports": "रिपोर्ट",
+        "logout": "लॉगआउट",
+        "welcome": "स्वागत है",
+        "language": "भाषा",
+        "save": "सेव करें",
+        "add": "जोड़ें",
+        "delete": "हटाएं",
+        "submit": "सबमिट करें",
+        "start": "शुरू करें",
+        "score": "स्कोर",
+        "difficulty": "कठिनाई",
+        "doctor": "डॉक्टर",
+        "patient": "मरीज",
+        "admin": "एडमिन",
+        "send_report": "रिपोर्ट भेजें",
+        "select_patient": "मरीज चुनें",
+        "no_reports": "कोई रिपोर्ट उपलब्ध नहीं है।",
+        "no_history": "कोई गेम इतिहास उपलब्ध नहीं है।",
+        "success": "सफलता"
+    },
+
+    "Marathi": {
+        "home": "मुख्यपृष्ठ",
+        "games": "संज्ञानात्मक खेळ",
+        "reminders": "स्मरणपत्रे",
+        "history": "माझा इतिहास",
+        "details": "माझी माहिती",
+        "reports": "अहवाल",
+        "logout": "लॉगआउट",
+        "welcome": "स्वागत आहे",
+        "language": "भाषा",
+        "save": "सेव्ह करा",
+        "add": "जोडा",
+        "delete": "हटवा",
+        "submit": "सबमिट करा",
+        "start": "सुरू करा",
+        "score": "गुण",
+        "difficulty": "अडचण",
+        "doctor": "डॉक्टर",
+        "patient": "रुग्ण",
+        "admin": "प्रशासक",
+        "send_report": "अहवाल पाठवा",
+        "select_patient": "रुग्ण निवडा",
+        "no_reports": "कोणताही अहवाल उपलब्ध नाही.",
+        "no_history": "कोणताही गेम इतिहास उपलब्ध नाही.",
+        "success": "यशस्वी"
+    },
+
+    "Gujarati": {
+        "home": "હોમ",
+        "games": "કોગ્નિટિવ ગેમ્સ",
+        "reminders": "રિમાઇન્ડર્સ",
+        "history": "મારો ઇતિહાસ",
+        "details": "મારી માહિતી",
+        "reports": "રિપોર્ટ્સ",
+        "logout": "લોગઆઉટ",
+        "welcome": "સ્વાગત છે",
+        "language": "ભાષા",
+        "save": "સેવ કરો",
+        "add": "ઉમેરો",
+        "delete": "કાઢી નાખો",
+        "submit": "સબમિટ કરો",
+        "start": "શરૂ કરો",
+        "score": "સ્કોર",
+        "difficulty": "મુશ્કેલી",
+        "doctor": "ડોક્ટર",
+        "patient": "દર્દી",
+        "admin": "એડમિન",
+        "send_report": "રિપોર્ટ મોકલો",
+        "select_patient": "દર્દી પસંદ કરો",
+        "no_reports": "કોઈ રિપોર્ટ ઉપલબ્ધ નથી.",
+        "no_history": "કોઈ ગેમ ઇતિહાસ ઉપલબ્ધ નથી.",
+        "success": "સફળ"
+    },
+
+    "Tamil": {
+        "home": "முகப்பு",
+        "games": "அறிவாற்றல் விளையாட்டுகள்",
+        "reminders": "நினைவூட்டல்கள்",
+        "history": "என் வரலாறு",
+        "details": "என் விவரங்கள்",
+        "reports": "அறிக்கைகள்",
+        "logout": "வெளியேறு",
+        "welcome": "வரவேற்கிறோம்",
+        "language": "மொழி",
+        "save": "சேமிக்கவும்",
+        "add": "சேர்க்கவும்",
+        "delete": "நீக்கவும்",
+        "submit": "சமர்ப்பிக்கவும்",
+        "start": "தொடங்கவும்",
+        "score": "மதிப்பெண்",
+        "difficulty": "சிரமம்",
+        "doctor": "மருத்துவர்",
+        "patient": "நோயாளர்",
+        "admin": "நிர்வாகி",
+        "send_report": "அறிக்கையை அனுப்பவும்",
+        "select_patient": "நோயாளியைத் தேர்ந்தெடுக்கவும்",
+        "no_reports": "அறிக்கைகள் இல்லை.",
+        "no_history": "விளையாட்டு வரலாறு இல்லை.",
+        "success": "வெற்றி"
+    },
+
+    "Telugu": {
+        "home": "హోమ్",
+        "games": "కాగ్నిటివ్ గేమ్స్",
+        "reminders": "రిమైండర్లు",
+        "history": "నా చరిత్ర",
+        "details": "నా వివరాలు",
+        "reports": "రిపోర్టులు",
+        "logout": "లాగ్ అవుట్",
+        "welcome": "స్వాగతం",
+        "language": "భాష",
+        "save": "సేవ్ చేయండి",
+        "add": "జోడించండి",
+        "delete": "తొలగించండి",
+        "submit": "సమర్పించండి",
+        "start": "ప్రారంభించండి",
+        "score": "స్కోర్",
+        "difficulty": "కష్టం",
+        "doctor": "డాక్టర్",
+        "patient": "రోగి",
+        "admin": "అడ్మిన్",
+        "send_report": "రిపోర్ట్ పంపండి",
+        "select_patient": "రోగిని ఎంచుకోండి",
+        "no_reports": "రిపోర్టులు లేవు.",
+        "no_history": "గేమ్ చరిత్ర లేదు.",
+        "success": "విజయం"
+    },
+
+    "Bengali": {
+        "home": "হোম",
+        "games": "কগনিটিভ গেম",
+        "reminders": "রিমাইন্ডার",
+        "history": "আমার ইতিহাস",
+        "details": "আমার তথ্য",
+        "reports": "রিপোর্ট",
+        "logout": "লগআউট",
+        "welcome": "স্বাগতম",
+        "language": "ভাষা",
+        "save": "সংরক্ষণ",
+        "add": "যোগ করুন",
+        "delete": "মুছুন",
+        "submit": "জমা দিন",
+        "start": "শুরু করুন",
+        "score": "স্কোর",
+        "difficulty": "কঠিনতা",
+        "doctor": "ডাক্তার",
+        "patient": "রোগী",
+        "admin": "অ্যাডমিন",
+        "send_report": "রিপোর্ট পাঠান",
+        "select_patient": "রোগী নির্বাচন করুন",
+        "no_reports": "কোনো রিপোর্ট নেই।",
+        "no_history": "কোনো গেম ইতিহাস নেই।",
+        "success": "সফল"
+    }
+}
+
+
+def text(key, language):
+    """
+    Returns translated UI text.
+    Falls back to English if translation is unavailable.
+    """
+    language_dict = TRANSLATIONS.get(
+        language,
+        TRANSLATIONS["English"]
+    )
+
+    return language_dict.get(
+        key,
+        TRANSLATIONS["English"].get(
+            key,
+            key
+        )
+    )
 
 
 # ============================================================
@@ -138,19 +461,18 @@ conn = get_db()
 # ============================================================
 
 def hash_password(password):
-
     return hashlib.sha256(
         password.encode("utf-8")
     ).hexdigest()
 
 
 # ============================================================
-# VOICE
+# VOICE OUTPUT
 # ============================================================
 
-def speak(text, language="English"):
+def speak(message, language="English"):
 
-    if not text:
+    if not message:
         return
 
     if gTTS is None:
@@ -158,18 +480,23 @@ def speak(text, language="English"):
 
     try:
 
-        audio = io.BytesIO()
+        audio_buffer = io.BytesIO()
 
         gTTS(
-            text=text,
-            lang=LANGUAGES.get(language, "en"),
+            text=message,
+            lang=LANGUAGES.get(
+                language,
+                LANGUAGES["English"]
+            )["code"],
             slow=False
-        ).write_to_fp(audio)
+        ).write_to_fp(
+            audio_buffer
+        )
 
-        audio.seek(0)
+        audio_buffer.seek(0)
 
         st.audio(
-            audio.read(),
+            audio_buffer.read(),
             format="audio/mp3",
             autoplay=True
         )
@@ -178,20 +505,26 @@ def speak(text, language="English"):
         pass
 
 
-def voice_success(text, language="English"):
+def announce(message, language="English"):
 
-    st.success("🔊 " + text)
+    st.success("🔊 " + message)
 
     speak(
-        text,
+        message,
         language
     )
 
 
-def recognize_voice(audio_bytes, language):
+# ============================================================
+# VOICE RECOGNITION
+# ============================================================
+
+def recognize_voice(
+    audio_bytes,
+    language
+):
 
     if sr is None:
-
         return None
 
     try:
@@ -202,73 +535,117 @@ def recognize_voice(audio_bytes, language):
             io.BytesIO(audio_bytes)
         ) as source:
 
-            audio = recognizer.record(source)
-
-        return recognizer.recognize_google(
-            audio,
-            language=LANGUAGES.get(
-                language,
-                "en"
+            audio = recognizer.record(
+                source
             )
-        ).lower()
+
+        speech_language = LANGUAGES.get(
+            language,
+            LANGUAGES["English"]
+        )["speech"]
+
+        command = recognizer.recognize_google(
+            audio,
+            language=speech_language
+        )
+
+        return command.lower().strip()
 
     except Exception:
 
         return None
 
 
-def parse_time(command):
+# ============================================================
+# TIME PARSER
+# ============================================================
+
+def parse_time_from_command(command):
+
+    if not command:
+        return None
 
     match = re.search(
-        r"\b([01]?\d|2[0-3]):([0-5]\d)\b",
+        r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b",
         command
     )
 
     if match:
 
-        return (
-            f"{int(match.group(1)):02d}:"
-            f"{int(match.group(2)):02d}"
+        hour = int(
+            match.group(1)
         )
+
+        minute = int(
+            match.group(2)
+        )
+
+        return f"{hour:02d}:{minute:02d}"
 
     return None
 
 
 # ============================================================
-# SESSION
+# SESSION STATE
 # ============================================================
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
+DEFAULT_SESSION_VALUES = {
+    "logged_in": False,
+    "user_id": None,
+    "name": "",
+    "username": "",
+    "role": None,
+    "language": "English",
+    "doctor_id": None,
+    "page": "home",
+    "welcome_pending": False,
+    "memory_sequence": None,
+    "pattern_sequence": None,
+    "reaction_target": None
+}
 
-if "role" not in st.session_state:
-    st.session_state.role = None
 
-if "user_id" not in st.session_state:
-    st.session_state.user_id = None
+for key, value in DEFAULT_SESSION_VALUES.items():
+
+    if key not in st.session_state:
+
+        st.session_state[key] = value
 
 
 # ============================================================
-# LOGIN PAGE
+# LOGIN / REGISTRATION
 # ============================================================
 
 if not st.session_state.logged_in:
 
-    st.title("🧠 MINDSETU NER")
-
-    st.subheader(
-        "Personalised AI Cognitive & Memory Companion"
+    st.markdown(
+        """
+        <div style="
+            text-align:center;
+            padding:25px;
+            border-radius:20px;
+            background:linear-gradient(135deg,#667eea,#764ba2);
+            color:white;
+        ">
+            <h1>🧠 MINDSETU NER</h1>
+            <p>Personalised Cognitive & Memory Companion</p>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
+    st.write("")
+
     st.info(
-        "Supportive wellness prototype. "
+        "MINDSETU NER is a prototype for cognitive "
+        "wellness and performance tracking. "
         "It is not a medical diagnostic system."
     )
 
     login_tab, signup_tab = st.tabs(
         [
             "🔐 Login",
-            "📝 Create Patient Account"
+            "📝 Patient Registration"
         ]
     )
 
@@ -279,30 +656,42 @@ if not st.session_state.logged_in:
 
     with login_tab:
 
+        st.subheader("Login")
+
         username = st.text_input(
-            "Username"
+            "Username",
+            key="login_username"
         )
 
         password = st.text_input(
             "Password",
-            type="password"
+            type="password",
+            key="login_password"
         )
 
         if st.button(
-            "Login",
-            type="primary"
+            "🔐 Login",
+            type="primary",
+            use_container_width=True
         ):
 
+            username_clean = username.strip()
+
+            # ------------------------------------------------
             # ADMIN LOGIN
-            if username.lower() == "admin":
+            # ------------------------------------------------
+
+            if username_clean.lower() == "admin":
 
                 if password == "admin123":
 
                     st.session_state.logged_in = True
-                    st.session_state.role = "admin"
                     st.session_state.user_id = 0
                     st.session_state.name = "Administrator"
+                    st.session_state.username = "admin"
+                    st.session_state.role = "admin"
                     st.session_state.language = "English"
+                    st.session_state.page = "home"
 
                     st.rerun()
 
@@ -311,6 +700,10 @@ if not st.session_state.logged_in:
                     st.error(
                         "Incorrect admin password."
                     )
+
+            # ------------------------------------------------
+            # NORMAL USER LOGIN
+            # ------------------------------------------------
 
             else:
 
@@ -327,7 +720,7 @@ if not st.session_state.logged_in:
                     FROM users
                     WHERE LOWER(username)=LOWER(?)
                     """,
-                    (username.strip(),)
+                    (username_clean,)
                 ).fetchone()
 
                 if user is None:
@@ -336,7 +729,10 @@ if not st.session_state.logged_in:
                         "Username not found."
                     )
 
-                elif hash_password(password) != user[3]:
+                elif (
+                    hash_password(password)
+                    != user[3]
+                ):
 
                     st.error(
                         "Incorrect password."
@@ -347,65 +743,82 @@ if not st.session_state.logged_in:
                     st.session_state.logged_in = True
                     st.session_state.user_id = user[0]
                     st.session_state.name = user[1]
+                    st.session_state.username = user[2]
                     st.session_state.language = user[4]
                     st.session_state.role = user[5]
                     st.session_state.doctor_id = user[6]
-
-                    st.session_state.say_welcome = True
+                    st.session_state.page = "home"
+                    st.session_state.welcome_pending = True
 
                     st.rerun()
 
 
     # ========================================================
-    # CREATE ACCOUNT
+    # REGISTRATION
     # ========================================================
 
     with signup_tab:
 
-        name = st.text_input(
-            "Full Name"
+        st.subheader(
+            "Create Patient Account"
         )
 
-        username = st.text_input(
-            "Username"
+        reg_name = st.text_input(
+            "Full Name",
+            key="reg_name"
         )
 
-        password = st.text_input(
+        reg_username = st.text_input(
+            "Username",
+            key="reg_username"
+        )
+
+        reg_password = st.text_input(
             "Password",
-            type="password"
+            type="password",
+            key="reg_password"
         )
 
-        confirm = st.text_input(
+        reg_confirm = st.text_input(
             "Confirm Password",
-            type="password"
+            type="password",
+            key="reg_confirm"
         )
 
-        language = st.selectbox(
-            "Select your language",
-            list(LANGUAGES.keys())
+        reg_language = st.selectbox(
+            "Select Language",
+            list(LANGUAGES.keys()),
+            key="reg_language"
         )
 
         if st.button(
-            "Create Account",
-            type="primary"
+            "📝 Create Patient Account",
+            type="primary",
+            use_container_width=True
         ):
 
-            if not name or not username or not password:
+            if not reg_name.strip():
 
                 st.error(
-                    "Please fill all fields."
+                    "Please enter your name."
                 )
 
-            elif password != confirm:
+            elif not reg_username.strip():
 
                 st.error(
-                    "Passwords do not match."
+                    "Please enter a username."
                 )
 
-            elif len(password) < 6:
+            elif len(reg_password) < 6:
 
                 st.error(
                     "Password must contain at least 6 characters."
+                )
+
+            elif reg_password != reg_confirm:
+
+                st.error(
+                    "Passwords do not match."
                 )
 
             else:
@@ -416,7 +829,9 @@ if not st.session_state.logged_in:
                     FROM users
                     WHERE LOWER(username)=LOWER(?)
                     """,
-                    (username,)
+                    (
+                        reg_username.strip(),
+                    )
                 ).fetchone()
 
                 if existing:
@@ -434,6 +849,7 @@ if not st.session_state.logged_in:
                             username,
                             password_hash,
                             language,
+                            baseline,
                             role
                         )
                         VALUES(
@@ -441,144 +857,1233 @@ if not st.session_state.logged_in:
                             ?,
                             ?,
                             ?,
+                            0,
                             'patient'
                         )
                         """,
                         (
-                            name,
-                            username,
-                            hash_password(password),
-                            language
+                            reg_name.strip(),
+                            reg_username.strip(),
+                            hash_password(
+                                reg_password
+                            ),
+                            reg_language
                         )
                     )
 
                     conn.commit()
 
                     st.success(
-                        "Account created successfully."
+                        "Patient account created successfully."
                     )
 
                     speak(
-                        f"Welcome {name}. "
-                        f"Your account was created successfully.",
-                        language
+                        (
+                            f"Welcome {reg_name.strip()}. "
+                            "Your patient account has been "
+                            "created successfully."
+                        ),
+                        reg_language
                     )
 
     st.stop()
 
 
 # ============================================================
-# CURRENT USER
+# LOAD SESSION USER
 # ============================================================
 
 role = st.session_state.role
 user_id = st.session_state.user_id
 name = st.session_state.name
-language = st.session_state.get(
-    "language",
-    "English"
-)
+language = st.session_state.language
 
 
 # ============================================================
 # WELCOME VOICE
 # ============================================================
 
-if st.session_state.pop(
-    "say_welcome",
-    False
-):
+if st.session_state.welcome_pending:
 
-    voice_success(
-        f"Welcome {name}. "
-        f"You have logged in successfully.",
+    st.session_state.welcome_pending = False
+
+    announce(
+        (
+            f"Welcome {name}. "
+            "You have logged in successfully."
+        ),
         language
     )
 
 
 # ============================================================
-# SIDEBAR
+# ADMIN
+# ============================================================
+
+if role == "admin":
+
+    st.title(
+        "👑 MINDSETU NER — Administrator Dashboard"
+    )
+
+    st.caption(
+        "Administrator has access to overall system information."
+    )
+
+    admin_tabs = st.tabs(
+        [
+            "📊 Overview",
+            "👥 Patients",
+            "🩺 Doctors",
+            "🔗 Assign Patients",
+            "🎮 All Sessions",
+            "📄 All Reports"
+        ]
+    )
+
+
+    # ========================================================
+    # ADMIN OVERVIEW
+    # ========================================================
+
+    with admin_tabs[0]:
+
+        patient_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM users
+            WHERE role='patient'
+            """
+        ).fetchone()[0]
+
+        doctor_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM users
+            WHERE role='doctor'
+            """
+        ).fetchone()[0]
+
+        session_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM sessions
+            """
+        ).fetchone()[0]
+
+        report_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM reports
+            """
+        ).fetchone()[0]
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        c1.metric(
+            "Patients",
+            patient_count
+        )
+
+        c2.metric(
+            "Doctors",
+            doctor_count
+        )
+
+        c3.metric(
+            "Game Sessions",
+            session_count
+        )
+
+        c4.metric(
+            "Reports",
+            report_count
+        )
+
+
+    # ========================================================
+    # ADMIN PATIENTS
+    # ========================================================
+
+    with admin_tabs[1]:
+
+        patients = conn.execute(
+            """
+            SELECT
+                id,
+                name,
+                username,
+                language,
+                baseline,
+                doctor_id
+            FROM users
+            WHERE role='patient'
+            ORDER BY name
+            """
+        ).fetchall()
+
+        if patients:
+
+            patient_data = []
+
+            for patient in patients:
+
+                doctor_name = "Not assigned"
+
+                if patient[5]:
+
+                    doctor = conn.execute(
+                        """
+                        SELECT name
+                        FROM users
+                        WHERE id=?
+                        AND role='doctor'
+                        """,
+                        (
+                            patient[5],
+                        )
+                    ).fetchone()
+
+                    if doctor:
+                        doctor_name = (
+                            "Dr. " +
+                            doctor[0]
+                        )
+
+                patient_data.append(
+                    {
+                        "ID": patient[0],
+                        "Name": patient[1],
+                        "Username": patient[2],
+                        "Language": patient[3],
+                        "Baseline": patient[4],
+                        "Doctor": doctor_name
+                    }
+                )
+
+            st.dataframe(
+                patient_data,
+                use_container_width=True,
+                hide_index=True
+            )
+
+        else:
+
+            st.info(
+                "No patients registered."
+            )
+
+
+    # ========================================================
+    # ADMIN DOCTORS
+    # ========================================================
+
+    with admin_tabs[2]:
+
+        st.subheader(
+            "➕ Add Doctor"
+        )
+
+        doctor_name = st.text_input(
+            "Doctor Name",
+            key="admin_doctor_name"
+        )
+
+        doctor_username = st.text_input(
+            "Doctor Username",
+            key="admin_doctor_username"
+        )
+
+        doctor_password = st.text_input(
+            "Doctor Password",
+            type="password",
+            key="admin_doctor_password"
+        )
+
+        if st.button(
+            "➕ Add Doctor",
+            type="primary"
+        ):
+
+            if not doctor_name.strip():
+
+                st.error(
+                    "Enter doctor name."
+                )
+
+            elif not doctor_username.strip():
+
+                st.error(
+                    "Enter doctor username."
+                )
+
+            elif len(doctor_password) < 6:
+
+                st.error(
+                    "Doctor password must contain at least 6 characters."
+                )
+
+            else:
+
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM users
+                    WHERE LOWER(username)=LOWER(?)
+                    """,
+                    (
+                        doctor_username.strip(),
+                    )
+                ).fetchone()
+
+                if existing:
+
+                    st.error(
+                        "Username already exists."
+                    )
+
+                else:
+
+                    conn.execute(
+                        """
+                        INSERT INTO users(
+                            name,
+                            username,
+                            password_hash,
+                            language,
+                            baseline,
+                            role
+                        )
+                        VALUES(
+                            ?,
+                            ?,
+                            ?,
+                            'English',
+                            0,
+                            'doctor'
+                        )
+                        """,
+                        (
+                            doctor_name.strip(),
+                            doctor_username.strip(),
+                            hash_password(
+                                doctor_password
+                            )
+                        )
+                    )
+
+                    conn.commit()
+
+                    announce(
+                        "Doctor added successfully.",
+                        "English"
+                    )
+
+                    st.rerun()
+
+
+        st.subheader(
+            "🩺 Registered Doctors"
+        )
+
+        doctors = conn.execute(
+            """
+            SELECT
+                id,
+                name,
+                username
+            FROM users
+            WHERE role='doctor'
+            ORDER BY name
+            """
+        ).fetchall()
+
+        if doctors:
+
+            st.dataframe(
+                [
+                    {
+                        "ID": doctor[0],
+                        "Doctor": doctor[1],
+                        "Username": doctor[2]
+                    }
+                    for doctor in doctors
+                ],
+                use_container_width=True,
+                hide_index=True
+            )
+
+        else:
+
+            st.info(
+                "No doctors added yet."
+            )
+
+
+    # ========================================================
+    # ASSIGN PATIENTS
+    # ========================================================
+
+    with admin_tabs[3]:
+
+        doctors = conn.execute(
+            """
+            SELECT
+                id,
+                name,
+                username
+            FROM users
+            WHERE role='doctor'
+            ORDER BY name
+            """
+        ).fetchall()
+
+        patients = conn.execute(
+            """
+            SELECT
+                id,
+                name,
+                username
+            FROM users
+            WHERE role='patient'
+            ORDER BY name
+            """
+        ).fetchall()
+
+        if not doctors:
+
+            st.warning(
+                "Add a doctor before assigning patients."
+            )
+
+        elif not patients:
+
+            st.warning(
+                "No patients are available."
+            )
+
+        else:
+
+            doctor_options = {
+                f"Dr. {d[1]} ({d[2]})": d[0]
+                for d in doctors
+            }
+
+            patient_options = {
+                f"{p[1]} ({p[2]})": p[0]
+                for p in patients
+            }
+
+            selected_doctor = st.selectbox(
+                "Select Doctor",
+                list(
+                    doctor_options.keys()
+                ),
+                key="assign_doctor"
+            )
+
+            selected_patient = st.selectbox(
+                "Select Patient",
+                list(
+                    patient_options.keys()
+                ),
+                key="assign_patient"
+            )
+
+            if st.button(
+                "🔗 Assign Patient to Doctor",
+                type="primary"
+            ):
+
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET doctor_id=?
+                    WHERE id=?
+                    AND role='patient'
+                    """,
+                    (
+                        doctor_options[
+                            selected_doctor
+                        ],
+                        patient_options[
+                            selected_patient
+                        ]
+                    )
+                )
+
+                conn.commit()
+
+                announce(
+                    "Patient assigned to doctor successfully.",
+                    "English"
+                )
+
+                st.rerun()
+
+
+            st.subheader(
+                "Current Assignments"
+            )
+
+            assignments = conn.execute(
+                """
+                SELECT
+                    p.name,
+                    p.username,
+                    d.name
+                FROM users p
+                LEFT JOIN users d
+                ON p.doctor_id=d.id
+                WHERE p.role='patient'
+                ORDER BY p.name
+                """
+            ).fetchall()
+
+            st.dataframe(
+                [
+                    {
+                        "Patient": row[0],
+                        "Username": row[1],
+                        "Doctor": (
+                            "Dr. " + row[2]
+                            if row[2]
+                            else "Not assigned"
+                        )
+                    }
+                    for row in assignments
+                ],
+                use_container_width=True,
+                hide_index=True
+            )
+
+
+    # ========================================================
+    # ADMIN SESSIONS
+    # ========================================================
+
+    with admin_tabs[4]:
+
+        sessions = conn.execute(
+            """
+            SELECT
+                u.name,
+                u.username,
+                s.game,
+                s.score,
+                s.difficulty,
+                s.created_at
+            FROM sessions s
+            INNER JOIN users u
+            ON s.user_id=u.id
+            ORDER BY s.id DESC
+            """
+        ).fetchall()
+
+        if sessions:
+
+            st.dataframe(
+                [
+                    {
+                        "Patient": row[0],
+                        "Username": row[1],
+                        "Game": row[2],
+                        "Score": row[3],
+                        "Difficulty": row[4],
+                        "Date": row[5]
+                    }
+                    for row in sessions
+                ],
+                use_container_width=True,
+                hide_index=True
+            )
+
+        else:
+
+            st.info(
+                "No sessions available."
+            )
+
+
+    # ========================================================
+    # ADMIN REPORTS
+    # ========================================================
+
+    with admin_tabs[5]:
+
+        reports = conn.execute(
+            """
+            SELECT
+                r.created_at,
+                p.name,
+                d.name,
+                r.title,
+                r.report_text
+            FROM reports r
+            INNER JOIN users p
+            ON r.patient_id=p.id
+            INNER JOIN users d
+            ON r.doctor_id=d.id
+            ORDER BY r.id DESC
+            """
+        ).fetchall()
+
+        if reports:
+
+            for report in reports:
+
+                with st.expander(
+                    f"{report[1]} — {report[3]}"
+                ):
+
+                    st.write(
+                        f"Doctor: Dr. {report[2]}"
+                    )
+
+                    st.write(
+                        f"Date: {report[0]}"
+                    )
+
+                    st.write(
+                        report[4]
+                    )
+
+        else:
+
+            st.info(
+                "No reports available."
+            )
+
+
+    # ADMIN LOGOUT
+
+    st.divider()
+
+    if st.button(
+        "🚪 Logout",
+        key="admin_logout"
+    ):
+
+        st.session_state.clear()
+
+        st.rerun()
+
+    st.stop()
+
+
+# ============================================================
+# DOCTOR DASHBOARD
+# ============================================================
+
+if role == "doctor":
+
+    st.title(
+        f"🩺 Doctor Portal — Dr. {name}"
+    )
+
+    st.info(
+        "Doctors can view assigned patients, "
+        "review performance and send reports. "
+        "Game access is disabled for doctors."
+    )
+
+    doctor_tabs = st.tabs(
+        [
+            "🏠 Overview",
+            "👥 My Patients",
+            "📊 Patient Performance",
+            "📄 Send Report"
+        ]
+    )
+
+    # --------------------------------------------------------
+    # GET ASSIGNED PATIENTS
+    # --------------------------------------------------------
+
+    assigned_patients = conn.execute(
+        """
+        SELECT
+            id,
+            name,
+            username,
+            language,
+            baseline
+        FROM users
+        WHERE role='patient'
+        AND doctor_id=?
+        ORDER BY name
+        """,
+        (
+            user_id,
+        )
+    ).fetchall()
+
+
+    # ========================================================
+    # DOCTOR OVERVIEW
+    # ========================================================
+
+    with doctor_tabs[0]:
+
+        c1, c2 = st.columns(2)
+
+        c1.metric(
+            "Assigned Patients",
+            len(assigned_patients)
+        )
+
+        c2.metric(
+            "Your Role",
+            "Doctor"
+        )
+
+        st.warning(
+            "🎮 Cognitive games are not available "
+            "for doctor accounts."
+        )
+
+
+    # ========================================================
+    # DOCTOR PATIENTS
+    # ========================================================
+
+    with doctor_tabs[1]:
+
+        if assigned_patients:
+
+            st.dataframe(
+                [
+                    {
+                        "Patient": p[1],
+                        "Username": p[2],
+                        "Language": p[3],
+                        "Baseline": p[4]
+                    }
+                    for p in assigned_patients
+                ],
+                use_container_width=True,
+                hide_index=True
+            )
+
+        else:
+
+            st.info(
+                "No patients have been assigned to you."
+            )
+
+
+    # ========================================================
+    # DOCTOR PERFORMANCE
+    # ========================================================
+
+    with doctor_tabs[2]:
+
+        if assigned_patients:
+
+            patient_map = {
+                f"{p[1]} ({p[2]})": p[0]
+                for p in assigned_patients
+            }
+
+            selected_patient_name = st.selectbox(
+                "Select Patient",
+                list(
+                    patient_map.keys()
+                ),
+                key="doctor_view_patient"
+            )
+
+            selected_patient_id = patient_map[
+                selected_patient_name
+            ]
+
+            patient = conn.execute(
+                """
+                SELECT
+                    id,
+                    name,
+                    username,
+                    language,
+                    baseline
+                FROM users
+                WHERE id=?
+                AND role='patient'
+                AND doctor_id=?
+                """,
+                (
+                    selected_patient_id,
+                    user_id
+                )
+            ).fetchone()
+
+            if patient:
+
+                st.subheader(
+                    f"👤 {patient[1]}"
+                )
+
+                c1, c2, c3 = st.columns(3)
+
+                c1.metric(
+                    "Baseline",
+                    f"{patient[4]:.1f}"
+                )
+
+                sessions = conn.execute(
+                    """
+                    SELECT
+                        game,
+                        score,
+                        difficulty,
+                        created_at
+                    FROM sessions
+                    WHERE user_id=?
+                    ORDER BY id DESC
+                    """,
+                    (
+                        selected_patient_id,
+                    )
+                ).fetchall()
+
+                scores = [
+                    float(s[1])
+                    for s in sessions
+                ]
+
+                average_score = (
+                    sum(scores) /
+                    len(scores)
+                    if scores
+                    else 0
+                )
+
+                best_score = (
+                    max(scores)
+                    if scores
+                    else 0
+                )
+
+                c2.metric(
+                    "Average Score",
+                    f"{average_score:.1f}"
+                )
+
+                c3.metric(
+                    "Best Score",
+                    f"{best_score:.1f}"
+                )
+
+                if sessions:
+
+                    st.subheader(
+                        "📊 Game Performance"
+                    )
+
+                    st.dataframe(
+                        [
+                            {
+                                "Game": s[0],
+                                "Score": s[1],
+                                "Difficulty": s[2],
+                                "Date": s[3]
+                            }
+                            for s in sessions
+                        ],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                else:
+
+                    st.info(
+                        "No game sessions recorded."
+                    )
+
+            else:
+
+                st.error(
+                    "Patient access denied."
+                )
+
+        else:
+
+            st.info(
+                "No patients assigned."
+            )
+
+
+    # ========================================================
+    # DOCTOR SEND REPORT
+    # ========================================================
+
+    with doctor_tabs[3]:
+
+        if assigned_patients:
+
+            patient_map = {
+                f"{p[1]} ({p[2]})": p[0]
+                for p in assigned_patients
+            }
+
+            selected_report_patient = st.selectbox(
+                "Select Patient",
+                list(
+                    patient_map.keys()
+                ),
+                key="doctor_report_patient"
+            )
+
+            report_patient_id = patient_map[
+                selected_report_patient
+            ]
+
+            sessions = conn.execute(
+                """
+                SELECT
+                    score
+                FROM sessions
+                WHERE user_id=?
+                """,
+                (
+                    report_patient_id,
+                )
+            ).fetchall()
+
+            report_scores = [
+                float(row[0])
+                for row in sessions
+            ]
+
+            report_average = (
+                sum(report_scores) /
+                len(report_scores)
+                if report_scores
+                else 0
+            )
+
+            report_best = (
+                max(report_scores)
+                if report_scores
+                else 0
+            )
+
+            st.write(
+                f"Completed sessions: "
+                f"**{len(report_scores)}**"
+            )
+
+            st.write(
+                f"Average score: "
+                f"**{report_average:.1f}**"
+            )
+
+            st.write(
+                f"Best score: "
+                f"**{report_best:.1f}**"
+            )
+
+            report_title = st.text_input(
+                "Report Title",
+                value="Overall Performance Report",
+                key="report_title"
+            )
+
+            report_text = st.text_area(
+                "Overall Performance Report",
+                value=(
+                    "Overall Performance Report\n\n"
+                    f"Total sessions: {len(report_scores)}\n"
+                    f"Average score: {report_average:.1f}\n"
+                    f"Best score: {report_best:.1f}\n\n"
+                    "Doctor's observations:\n"
+                ),
+                height=280,
+                key="report_text"
+            )
+
+            if st.button(
+                "📤 Send Report to Patient",
+                type="primary"
+            ):
+
+                # Security check:
+                # Doctor can only send to assigned patient.
+
+                valid_patient = conn.execute(
+                    """
+                    SELECT id
+                    FROM users
+                    WHERE id=?
+                    AND role='patient'
+                    AND doctor_id=?
+                    """,
+                    (
+                        report_patient_id,
+                        user_id
+                    )
+                ).fetchone()
+
+                if not valid_patient:
+
+                    st.error(
+                        "You are not authorized to send "
+                        "a report to this patient."
+                    )
+
+                elif not report_text.strip():
+
+                    st.error(
+                        "Report cannot be empty."
+                    )
+
+                else:
+
+                    conn.execute(
+                        """
+                        INSERT INTO reports(
+                            patient_id,
+                            doctor_id,
+                            title,
+                            report_text,
+                            created_at,
+                            status
+                        )
+                        VALUES(
+                            ?,
+                            ?,
+                            ?,
+                            ?,
+                            ?,
+                            'Sent'
+                        )
+                        """,
+                        (
+                            report_patient_id,
+                            user_id,
+                            report_title.strip(),
+                            report_text.strip(),
+                            datetime.now().isoformat(
+                                timespec="seconds"
+                            )
+                        )
+                    )
+
+                    conn.commit()
+
+                    announce(
+                        "Overall performance report "
+                        "sent successfully to the patient.",
+                        "English"
+                    )
+
+                    st.rerun()
+
+        else:
+
+            st.info(
+                "Assign patients before sending reports."
+            )
+
+
+    # ========================================================
+    # DOCTOR LOGOUT
+    # ========================================================
+
+    st.divider()
+
+    if st.button(
+        "🚪 Logout",
+        key="doctor_logout"
+    ):
+
+        st.session_state.clear()
+
+        st.rerun()
+
+    st.stop()
+
+
+# ============================================================
+# PATIENT ACCOUNT
+# ============================================================
+
+patient = conn.execute(
+    """
+    SELECT
+        id,
+        name,
+        username,
+        language,
+        baseline,
+        role,
+        doctor_id
+    FROM users
+    WHERE id=?
+    AND role='patient'
+    """,
+    (
+        user_id,
+    )
+).fetchone()
+
+
+if patient is None:
+
+    st.error(
+        "Patient account could not be loaded."
+    )
+
+    st.session_state.clear()
+
+    st.stop()
+
+
+# Refresh patient information
+user_id = patient[0]
+name = patient[1]
+username = patient[2]
+language = patient[3]
+doctor_id = patient[6]
+
+
+# ============================================================
+# PATIENT BASELINE
+# ============================================================
+
+def calculate_baseline(patient_id):
+
+    rows = conn.execute(
+        """
+        SELECT score
+        FROM sessions
+        WHERE user_id=?
+        ORDER BY id DESC
+        LIMIT 10
+        """,
+        (
+            patient_id,
+        )
+    ).fetchall()
+
+    if not rows:
+        return 0.0
+
+    return round(
+        sum(
+            float(row[0])
+            for row in rows
+        ) / len(rows),
+        1
+    )
+
+
+baseline = calculate_baseline(
+    user_id
+)
+
+
+# ============================================================
+# ADAPTIVE DIFFICULTY
+# ============================================================
+
+def calculate_difficulty(baseline_score):
+
+    if baseline_score >= 85:
+        return 3
+
+    if baseline_score >= 65:
+        return 2
+
+    return 1
+
+
+difficulty = calculate_difficulty(
+    baseline
+)
+
+
+# ============================================================
+# PATIENT SIDEBAR
 # ============================================================
 
 with st.sidebar:
 
-    st.header("🧠 MINDSETU NER")
+    st.markdown(
+        "## 🧠 MINDSETU NER"
+    )
 
     st.write(
         f"👤 **{name}**"
     )
 
-    if role == "admin":
+    st.caption(
+        f"Role: Patient"
+    )
 
-        st.success(
-            "👑 Administrator"
-        )
-
-    elif role == "doctor":
-
-        st.success(
-            "🩺 Doctor"
-        )
-
-    else:
-
-        st.info(
-            "👤 Patient"
-        )
-
-
-    # ========================================================
-    # LANGUAGE
-    # ========================================================
+    st.divider()
 
     st.subheader(
-        "🌐 Language"
+        "🌐 " +
+        text(
+            "language",
+            language
+        )
+    )
+
+    language_options = list(
+        LANGUAGES.keys()
+    )
+
+    current_index = (
+        language_options.index(language)
+        if language in language_options
+        else 0
     )
 
     selected_language = st.selectbox(
-        "Choose any language",
-        list(LANGUAGES.keys()),
-        index=list(
-            LANGUAGES.keys()
-        ).index(language)
+        "Select Language",
+        language_options,
+        index=current_index,
+        key="patient_language_select"
     )
 
     if selected_language != language:
 
-        if role != "admin":
-
-            conn.execute(
-                """
-                UPDATE users
-                SET language=?
-                WHERE id=?
-                """,
-                (
-                    selected_language,
-                    user_id
-                )
+        conn.execute(
+            """
+            UPDATE users
+            SET language=?
+            WHERE id=?
+            AND role='patient'
+            """,
+            (
+                selected_language,
+                user_id
             )
+        )
 
-            conn.commit()
+        conn.commit()
 
-            st.session_state.language = (
-                selected_language
-            )
+        st.session_state.language = (
+            selected_language
+        )
 
-            language = selected_language
+        announce(
+            (
+                "Language changed to "
+                f"{selected_language} successfully."
+            ),
+            selected_language
+        )
 
-            voice_success(
-                f"Language changed to "
-                f"{selected_language} successfully.",
-                language
-            )
-
-            st.rerun()
+        st.rerun()
 
 
     # ========================================================
-    # VOICE COMMAND
+    # VOICE COMMANDS
     # ========================================================
+
+    st.divider()
 
     st.subheader(
         "🎤 Voice Commands"
@@ -587,75 +2092,130 @@ with st.sidebar:
     if mic_recorder is None:
 
         st.warning(
-            "Install streamlit-mic-recorder."
+            "Voice input package is not installed."
         )
 
     else:
 
-        audio = mic_recorder(
-            start_prompt="🎤 Start",
-            stop_prompt="⏹ Stop",
-            key="voice"
+        audio_data = mic_recorder(
+            start_prompt="🎤 Start Voice",
+            stop_prompt="⏹ Stop Voice",
+            key="patient_voice_recorder"
         )
 
-        if audio:
+        if audio_data:
 
             command = recognize_voice(
-                audio["bytes"],
+                audio_data["bytes"],
                 language
             )
 
             if command:
 
-                st.write(
-                    f"**Command:** {command}"
+                st.success(
+                    f"Recognized: {command}"
                 )
 
-                if "logout" in command:
+                # --------------------------------------------
+                # LOGOUT
+                # --------------------------------------------
+
+                if (
+                    "logout" in command
+                    or "log out" in command
+                    or "exit" in command
+                ):
+
+                    announce(
+                        "Logging out now.",
+                        language
+                    )
 
                     st.session_state.clear()
 
                     st.rerun()
 
+
+                # --------------------------------------------
+                # GAMES
+                # --------------------------------------------
+
                 elif (
                     "game" in command
+                    or "games" in command
                     or "play" in command
                 ):
 
                     st.session_state.page = "games"
 
-                    voice_success(
+                    announce(
                         "Opening cognitive games.",
                         language
                     )
 
-                elif "reminder" in command:
+                    st.rerun()
+
+
+                # --------------------------------------------
+                # REMINDERS
+                # --------------------------------------------
+
+                elif (
+                    "reminder" in command
+                    or "reminders" in command
+                ):
 
                     st.session_state.page = "reminders"
 
-                    due = parse_time(
-                        command
+                    reminder_time = (
+                        parse_time_from_command(
+                            command
+                        )
                     )
 
                     if (
-                        due
+                        reminder_time
                         and (
                             "add" in command
                             or "set" in command
+                            or "create" in command
                         )
                     ):
 
-                        title = (
-                            command
-                            .replace(
-                                "add reminder",
-                                ""
+                        reminder_title = command
+
+                        for phrase in [
+                            "add reminder",
+                            "set reminder",
+                            "create reminder",
+                            "add a reminder",
+                            "set a reminder",
+                            "create a reminder"
+                        ]:
+
+                            reminder_title = (
+                                reminder_title
+                                .replace(
+                                    phrase,
+                                    ""
+                                )
                             )
-                            .replace(
-                                "set reminder",
-                                ""
-                            )
+
+                        reminder_title = re.sub(
+                            r"\b(?:at|for)\s+\d{1,2}[:.]\d{2}\b",
+                            "",
+                            reminder_title
                         )
+
+                        reminder_title = (
+                            reminder_title
+                            .strip()
+                            .title()
+                        )
+
+                        if not reminder_title:
+
+                            reminder_title = "Reminder"
 
                         conn.execute(
                             """
@@ -674,44 +2234,134 @@ with st.sidebar:
                             """,
                             (
                                 user_id,
-                                title.strip().title(),
-                                f"{date.today()} {due}"
+                                reminder_title,
+                                (
+                                    f"{date.today()} "
+                                    f"{reminder_time}"
+                                )
                             )
                         )
 
                         conn.commit()
 
-                        voice_success(
-                            f"Reminder added "
-                            f"successfully for {due}.",
+                        announce(
+                            (
+                                f"{reminder_title} "
+                                f"reminder added successfully "
+                                f"for {reminder_time}."
+                            ),
                             language
                         )
 
-                        st.rerun()
+                    else:
 
-                elif "report" in command:
+                        announce(
+                            "Opening your reminders.",
+                            language
+                        )
+
+                    st.rerun()
+
+
+                # --------------------------------------------
+                # REPORT
+                # --------------------------------------------
+
+                elif (
+                    "report" in command
+                    or "reports" in command
+                ):
 
                     st.session_state.page = "reports"
 
-                    voice_success(
-                        "Opening reports.",
+                    announce(
+                        "Opening your reports.",
                         language
                     )
 
+                    st.rerun()
+
+
+                # --------------------------------------------
+                # HISTORY
+                # --------------------------------------------
+
+                elif (
+                    "history" in command
+                    or "performance" in command
+                ):
+
+                    st.session_state.page = "history"
+
+                    announce(
+                        "Opening your performance history.",
+                        language
+                    )
+
+                    st.rerun()
+
+
+                # --------------------------------------------
+                # DETAILS
+                # --------------------------------------------
+
                 elif (
                     "details" in command
+                    or "profile" in command
                     or "my data" in command
                 ):
 
                     st.session_state.page = "details"
 
-                    voice_success(
+                    announce(
                         "Opening your details.",
                         language
                     )
 
+                    st.rerun()
 
-    if st.button("Logout"):
+
+                # --------------------------------------------
+                # HOME
+                # --------------------------------------------
+
+                elif (
+                    "home" in command
+                    or "dashboard" in command
+                ):
+
+                    st.session_state.page = "home"
+
+                    announce(
+                        "Opening your dashboard.",
+                        language
+                    )
+
+                    st.rerun()
+
+                else:
+
+                    st.warning(
+                        "Command not recognized."
+                    )
+
+                    st.caption(
+                        "Try: open games, open reminders, "
+                        "open reports, open history, "
+                        "open details, or logout."
+                    )
+
+
+    st.divider()
+
+    if st.button(
+        "🚪 " +
+        text(
+            "logout",
+            language
+        ),
+        use_container_width=True
+    ):
 
         st.session_state.clear()
 
@@ -719,1025 +2369,642 @@ with st.sidebar:
 
 
 # ============================================================
-# ADMIN DASHBOARD
-# ============================================================
-
-if role == "admin":
-
-    st.title(
-        "👑 Administrator Dashboard"
-    )
-
-    st.success(
-        "Administrator can view all system details "
-        "and manage doctors."
-    )
-
-    tabs = st.tabs(
-        [
-            "🏠 Overview",
-            "👥 Patients",
-            "🩺 Doctors",
-            "📊 All Sessions",
-            "📄 Reports"
-        ]
-    )
-
-
-    # ========================================================
-    # OVERVIEW
-    # ========================================================
-
-    with tabs[0]:
-
-        patients = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM users
-            WHERE role='patient'
-            """
-        ).fetchone()[0]
-
-        doctors = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM users
-            WHERE role='doctor'
-            """
-        ).fetchone()[0]
-
-        sessions = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM sessions
-            """
-        ).fetchone()[0]
-
-        reports = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM reports
-            """
-        ).fetchone()[0]
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        c1.metric(
-            "Patients",
-            patients
-        )
-
-        c2.metric(
-            "Doctors",
-            doctors
-        )
-
-        c3.metric(
-            "Game Sessions",
-            sessions
-        )
-
-        c4.metric(
-            "Reports",
-            reports
-        )
-
-
-    # ========================================================
-    # PATIENTS
-    # ========================================================
-
-    with tabs[1]:
-
-        rows = conn.execute(
-            """
-            SELECT
-                id,
-                name,
-                username,
-                language,
-                baseline,
-                doctor_id
-            FROM users
-            WHERE role='patient'
-            ORDER BY name
-            """
-        ).fetchall()
-
-        if rows:
-
-            st.dataframe(
-                [
-                    {
-                        "ID": r[0],
-                        "Name": r[1],
-                        "Username": r[2],
-                        "Language": r[3],
-                        "Baseline": r[4],
-                        "Doctor ID": r[5] or "Not assigned"
-                    }
-                    for r in rows
-                ],
-                use_container_width=True
-            )
-
-        else:
-
-            st.info(
-                "No patients registered."
-            )
-
-
-    # ========================================================
-    # DOCTORS
-    # ========================================================
-
-    with tabs[2]:
-
-        st.subheader(
-            "➕ Add Doctor"
-        )
-
-        doctor_name = st.text_input(
-            "Doctor Name"
-        )
-
-        doctor_username = st.text_input(
-            "Doctor Username"
-        )
-
-        doctor_password = st.text_input(
-            "Doctor Password",
-            type="password"
-        )
-
-        if st.button(
-            "Add Doctor",
-            type="primary"
-        ):
-
-            if (
-                not doctor_name
-                or not doctor_username
-                or len(doctor_password) < 6
-            ):
-
-                st.error(
-                    "Enter all doctor details."
-                )
-
-            else:
-
-                existing = conn.execute(
-                    """
-                    SELECT id
-                    FROM users
-                    WHERE LOWER(username)=LOWER(?)
-                    """,
-                    (doctor_username,)
-                ).fetchone()
-
-                if existing:
-
-                    st.error(
-                        "Username already exists."
-                    )
-
-                else:
-
-                    conn.execute(
-                        """
-                        INSERT INTO users(
-                            name,
-                            username,
-                            password_hash,
-                            language,
-                            role
-                        )
-                        VALUES(
-                            ?,
-                            ?,
-                            ?,
-                            'English',
-                            'doctor'
-                        )
-                        """,
-                        (
-                            doctor_name,
-                            doctor_username,
-                            hash_password(
-                                doctor_password
-                            )
-                        )
-                    )
-
-                    conn.commit()
-
-                    voice_success(
-                        "Doctor added successfully.",
-                        "English"
-                    )
-
-                    st.rerun()
-
-
-        doctors = conn.execute(
-            """
-            SELECT
-                id,
-                name,
-                username
-            FROM users
-            WHERE role='doctor'
-            ORDER BY name
-            """
-        ).fetchall()
-
-        st.subheader(
-            "🩺 Registered Doctors"
-        )
-
-        if doctors:
-
-            st.dataframe(
-                [
-                    {
-                        "ID": d[0],
-                        "Doctor": d[1],
-                        "Username": d[2]
-                    }
-                    for d in doctors
-                ],
-                use_container_width=True
-            )
-
-
-            st.subheader(
-                "Assign Patient to Doctor"
-            )
-
-            doctor_map = {
-                f"{d[1]} ({d[2]})": d[0]
-                for d in doctors
-            }
-
-            patient_rows = conn.execute(
-                """
-                SELECT id,name,username
-                FROM users
-                WHERE role='patient'
-                ORDER BY name
-                """
-            ).fetchall()
-
-            patient_map = {
-                f"{p[1]} ({p[2]})": p[0]
-                for p in patient_rows
-            }
-
-            if patient_map:
-
-                selected_doctor = st.selectbox(
-                    "Doctor",
-                    list(
-                        doctor_map.keys()
-                    )
-                )
-
-                selected_patient = st.selectbox(
-                    "Patient",
-                    list(
-                        patient_map.keys()
-                    )
-                )
-
-                if st.button(
-                    "Assign Patient"
-                ):
-
-                    conn.execute(
-                        """
-                        UPDATE users
-                        SET doctor_id=?
-                        WHERE id=?
-                        """,
-                        (
-                            doctor_map[
-                                selected_doctor
-                            ],
-                            patient_map[
-                                selected_patient
-                            ]
-                        )
-                    )
-
-                    conn.commit()
-
-                    voice_success(
-                        "Patient assigned successfully.",
-                        "English"
-                    )
-
-                    st.rerun()
-
-
-    # ========================================================
-    # ALL SESSIONS
-    # ========================================================
-
-    with tabs[3]:
-
-        rows = conn.execute(
-            """
-            SELECT
-                u.name,
-                u.username,
-                s.game,
-                s.score,
-                s.difficulty,
-                s.created_at
-            FROM sessions s
-            JOIN users u
-            ON s.user_id=u.id
-            ORDER BY s.id DESC
-            """
-        ).fetchall()
-
-        if rows:
-
-            st.dataframe(
-                [
-                    {
-                        "Patient": r[0],
-                        "Username": r[1],
-                        "Game": r[2],
-                        "Score": r[3],
-                        "Difficulty": r[4],
-                        "Date": r[5]
-                    }
-                    for r in rows
-                ],
-                use_container_width=True
-            )
-
-
-    # ========================================================
-    # REPORTS
-    # ========================================================
-
-    with tabs[4]:
-
-        rows = conn.execute(
-            """
-            SELECT
-                r.created_at,
-                p.name,
-                d.name,
-                r.title,
-                r.report_text
-            FROM reports r
-            JOIN users p
-            ON r.patient_id=p.id
-            JOIN users d
-            ON r.doctor_id=d.id
-            ORDER BY r.id DESC
-            """
-        ).fetchall()
-
-        for r in rows:
-
-            with st.expander(
-                f"{r[1]} — {r[3]}"
-            ):
-
-                st.write(
-                    f"Doctor: Dr. {r[2]}"
-                )
-
-                st.write(
-                    f"Date: {r[0]}"
-                )
-
-                st.write(
-                    r[4]
-                )
-
-    st.stop()
-
-
-# ============================================================
-# DOCTOR DASHBOARD
-# ============================================================
-
-if role == "doctor":
-
-    st.title(
-        f"🩺 Doctor Portal — Dr. {name}"
-    )
-
-    st.info(
-        "Doctors can view assigned patient information "
-        "and send reports. Doctors cannot play games."
-    )
-
-    tabs = st.tabs(
-        [
-            "🏠 Overview",
-            "👥 Patients",
-            "📊 Patient Details",
-            "📄 Send Report"
-        ]
-    )
-
-    patients = conn.execute(
-        """
-        SELECT
-            id,
-            name,
-            username,
-            language,
-            baseline
-        FROM users
-        WHERE role='patient'
-        AND doctor_id=?
-        ORDER BY name
-        """,
-        (user_id,)
-    ).fetchall()
-
-
-    with tabs[0]:
-
-        st.metric(
-            "Assigned Patients",
-            len(patients)
-        )
-
-        st.write(
-            "🔒 Game access is disabled for doctor accounts."
-        )
-
-
-    with tabs[1]:
-
-        if patients:
-
-            st.dataframe(
-                [
-                    {
-                        "Patient": p[1],
-                        "Username": p[2],
-                        "Language": p[3],
-                        "Baseline": p[4]
-                    }
-                    for p in patients
-                ],
-                use_container_width=True
-            )
-
-        else:
-
-            st.info(
-                "No patients assigned."
-            )
-
-
-    with tabs[2]:
-
-        if patients:
-
-            patient_map = {
-                f"{p[1]} ({p[2]})": p[0]
-                for p in patients
-            }
-
-            selected = st.selectbox(
-                "Select Patient",
-                list(patient_map.keys())
-            )
-
-            patient_id = patient_map[
-                selected
-            ]
-
-            patient = conn.execute(
-                """
-                SELECT
-                    name,
-                    username,
-                    language,
-                    baseline
-                FROM users
-                WHERE id=?
-                """,
-                (patient_id,)
-            ).fetchone()
-
-            st.write(
-                f"### 👤 {patient[0]}"
-            )
-
-            st.write(
-                f"Username: {patient[1]}"
-            )
-
-            st.write(
-                f"Language: {patient[2]}"
-            )
-
-            st.metric(
-                "Personal Baseline",
-                f"{patient[3]:.1f}"
-            )
-
-            sessions = conn.execute(
-                """
-                SELECT
-                    game,
-                    score,
-                    difficulty,
-                    created_at
-                FROM sessions
-                WHERE user_id=?
-                ORDER BY id DESC
-                """,
-                (patient_id,)
-            ).fetchall()
-
-            if sessions:
-
-                st.dataframe(
-                    [
-                        {
-                            "Game": s[0],
-                            "Score": s[1],
-                            "Difficulty": s[2],
-                            "Date": s[3]
-                        }
-                        for s in sessions
-                    ],
-                    use_container_width=True
-                )
-
-            else:
-
-                st.info(
-                    "No game history available."
-                )
-
-
-    with tabs[3]:
-
-        if patients:
-
-            patient_map = {
-                f"{p[1]} ({p[2]})": p[0]
-                for p in patients
-            }
-
-            selected = st.selectbox(
-                "Select Patient",
-                list(patient_map.keys()),
-                key="report_patient"
-            )
-
-            patient_id = patient_map[
-                selected
-            ]
-
-            sessions = conn.execute(
-                """
-                SELECT score
-                FROM sessions
-                WHERE user_id=?
-                """,
-                (patient_id,)
-            ).fetchall()
-
-            scores = [
-                float(x[0])
-                for x in sessions
-            ]
-
-            average = (
-                sum(scores) / len(scores)
-                if scores else 0
-            )
-
-            best = (
-                max(scores)
-                if scores else 0
-            )
-
-            report_title = st.text_input(
-                "Report Title",
-                value="Overall Performance Report"
-            )
-
-            report = st.text_area(
-                "Doctor Report",
-                value=(
-                    "Overall Performance Report\n\n"
-                    f"Sessions completed: {len(scores)}\n"
-                    f"Average score: {average:.1f}\n"
-                    f"Best score: {best:.1f}\n\n"
-                    "Doctor's observation:\n"
-                ),
-                height=250
-            )
-
-            if st.button(
-                "📤 Send Report",
-                type="primary"
-            ):
-
-                conn.execute(
-                    """
-                    INSERT INTO reports(
-                        patient_id,
-                        doctor_id,
-                        title,
-                        report_text,
-                        created_at
-                    )
-                    VALUES(
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?
-                    )
-                    """,
-                    (
-                        patient_id,
-                        user_id,
-                        report_title,
-                        report,
-                        datetime.now().isoformat(
-                            timespec="seconds"
-                        )
-                    )
-                )
-
-                conn.commit()
-
-                voice_success(
-                    "Overall performance report "
-                    "sent successfully to the patient.",
-                    "English"
-                )
-
-                st.rerun()
-
-        else:
-
-            st.info(
-                "Assign patients first."
-            )
-
-    st.stop()
-
-
-# ============================================================
-# PATIENT
-# ============================================================
-
-patient = conn.execute(
-    """
-    SELECT
-        id,
-        name,
-        username,
-        language,
-        baseline,
-        doctor_id
-    FROM users
-    WHERE id=?
-    AND role='patient'
-    """,
-    (user_id,)
-).fetchone()
-
-if patient is None:
-
-    st.error(
-        "Patient account not found."
-    )
-
-    st.stop()
-
-
-user_id = patient[0]
-name = patient[1]
-username = patient[2]
-language = patient[3]
-doctor_id = patient[5]
-
-
-# ============================================================
-# BASELINE
-# ============================================================
-
-def get_baseline():
-
-    rows = conn.execute(
-        """
-        SELECT score
-        FROM sessions
-        WHERE user_id=?
-        ORDER BY id DESC
-        LIMIT 10
-        """,
-        (user_id,)
-    ).fetchall()
-
-    if not rows:
-
-        return 0
-
-    return round(
-        sum(
-            float(x[0])
-            for x in rows
-        ) / len(rows),
-        1
-    )
-
-
-baseline = get_baseline()
-
-
-def get_difficulty():
-
-    if baseline >= 85:
-        return 3
-
-    if baseline >= 65:
-        return 2
-
-    return 1
-
-
-difficulty = get_difficulty()
-
-
-# ============================================================
 # PATIENT NAVIGATION
 # ============================================================
 
-if "page" not in st.session_state:
-
-    st.session_state.page = "home"
-
-
-pages = {
-    "home": "🏠 Home",
-    "games": "🎮 Cognitive Games",
-    "reminders": "⏰ Reminders",
-    "history": "📜 My History",
-    "details": "👤 My Details",
-    "reports": "📄 Reports"
+page_names = {
+    "home": "🏠 " + text("home", language),
+    "games": "🎮 " + text("games", language),
+    "reminders": "⏰ " + text("reminders", language),
+    "history": "📜 " + text("history", language),
+    "details": "👤 " + text("details", language),
+    "reports": "📄 " + text("reports", language)
 }
 
-
-page = st.radio(
-    "Navigation",
-    list(pages.keys()),
-    format_func=lambda x: pages[x],
-    horizontal=True
+page_keys = list(
+    page_names.keys()
 )
 
-st.session_state.page = page
+current_page = st.session_state.page
+
+if current_page not in page_keys:
+
+    current_page = "home"
+
+selected_page = st.radio(
+    "Navigation",
+    page_keys,
+    format_func=lambda key: page_names[key],
+    horizontal=True,
+    index=page_keys.index(
+        current_page
+    )
+)
+
+st.session_state.page = selected_page
 
 
 # ============================================================
-# HOME
+# PATIENT HOME
 # ============================================================
 
-if page == "home":
+if selected_page == "home":
 
-    st.title(
-        f"🧠 Welcome {name}!"
+    st.markdown(
+        f"""
+        <div style="
+            padding:25px;
+            border-radius:20px;
+            background:linear-gradient(135deg,#667eea,#764ba2);
+            color:white;
+        ">
+            <h1>🧠 {text("welcome", language)}, {name}!</h1>
+            <p>Your personalised MINDSETU NER dashboard</p>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
 
-    c1, c2, c3 = st.columns(3)
+    st.write("")
 
-    sessions_count = conn.execute(
+    c1, c2, c3, c4 = st.columns(4)
+
+    total_sessions = conn.execute(
         """
         SELECT COUNT(*)
         FROM sessions
         WHERE user_id=?
         """,
-        (user_id,)
+        (
+            user_id,
+        )
+    ).fetchone()[0]
+
+    completed_reminders = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM reminders
+        WHERE user_id=?
+        AND status='Done'
+        """
+        ,
+        (
+            user_id,
+        )
+    ).fetchone()[0]
+
+    report_count = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM reports
+        WHERE patient_id=?
+        """,
+        (
+            user_id,
+        )
     ).fetchone()[0]
 
     c1.metric(
         "Personal Baseline",
-        baseline
+        f"{baseline:.1f}"
     )
 
     c2.metric(
-        "Current Difficulty",
+        "Difficulty",
         difficulty
     )
 
     c3.metric(
         "Sessions",
-        sessions_count
+        total_sessions
     )
 
-    st.success(
-        "Your personal dashboard is ready."
+    c4.metric(
+        "Reports",
+        report_count
     )
+
+    st.divider()
 
     if doctor_id:
 
         doctor = conn.execute(
             """
-            SELECT name
+            SELECT
+                name,
+                username
             FROM users
             WHERE id=?
             AND role='doctor'
             """,
-            (doctor_id,)
+            (
+                doctor_id,
+            )
         ).fetchone()
 
         if doctor:
 
-            st.info(
-                f"🩺 Assigned Doctor: Dr. {doctor[0]}"
+            st.success(
+                f"🩺 Assigned Doctor: "
+                f"Dr. {doctor[0]}"
             )
 
     else:
 
         st.info(
-            "🩺 No doctor assigned yet."
+            "🩺 No doctor has been assigned yet."
         )
+
+    st.info(
+        "Your games automatically adapt their difficulty "
+        "based on your recent performance."
+    )
 
 
 # ============================================================
 # COGNITIVE GAMES
 # ============================================================
 
-elif page == "games":
+elif selected_page == "games":
 
     st.title(
-        "🎮 Cognitive Games"
+        "🎮 " +
+        text(
+            "games",
+            language
+        )
     )
 
     st.write(
-        f"Current adaptive difficulty: **{difficulty}**"
+        f"Adaptive difficulty level: **{difficulty} / 3**"
+    )
+
+    game_tab1, game_tab2, game_tab3 = st.tabs(
+        [
+            "🧠 Memory Sequence",
+            "🔷 Pattern Memory",
+            "⚡ Attention Game"
+        ]
     )
 
 
     # ========================================================
-    # MEMORY SEQUENCE
+    # MEMORY SEQUENCE GAME
     # ========================================================
 
-    st.subheader(
-        "🧠 Memory Sequence"
-    )
+    with game_tab1:
 
-    length = {
-        1: 4,
-        2: 6,
-        3: 8
-    }[difficulty]
-
-    if "sequence" not in st.session_state:
-
-        st.session_state.sequence = None
-
-
-    if st.button(
-        "Start Memory Game",
-        type="primary"
-    ):
-
-        st.session_state.sequence = random.sample(
-            range(1, 10),
-            length
+        st.subheader(
+            "🧠 Memory Sequence"
         )
 
-    sequence = st.session_state.sequence
+        sequence_length = {
+            1: 4,
+            2: 6,
+            3: 8
+        }[difficulty]
 
-    if sequence:
+        if st.session_state.memory_sequence is None:
 
-        st.success(
-            "Remember this sequence:"
-        )
-
-        st.markdown(
-            "### " +
-            " • ".join(
-                map(str, sequence)
+            st.write(
+                f"Remember {sequence_length} numbers."
             )
-        )
 
-        answer = st.text_input(
-            "Enter the sequence"
-        )
+            if st.button(
+                "▶️ Start Memory Game",
+                type="primary",
+                key="memory_start"
+            ):
 
-        if st.button(
-            "Submit Answer"
-        ):
-
-            try:
-
-                user_answer = [
-                    int(x)
-                    for x in answer.replace(
-                        ",",
-                        " "
-                    ).split()
-                ]
-
-                correct = sum(
-                    a == b
-                    for a, b in zip(
-                        sequence,
-                        user_answer
+                st.session_state.memory_sequence = (
+                    random.sample(
+                        range(1, 10),
+                        sequence_length
                     )
                 )
-
-                score = round(
-                    correct /
-                    len(sequence) *
-                    100,
-                    1
-                )
-
-                conn.execute(
-                    """
-                    INSERT INTO sessions(
-                        user_id,
-                        game,
-                        score,
-                        difficulty,
-                        created_at
-                    )
-                    VALUES(
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?
-                    )
-                    """,
-                    (
-                        user_id,
-                        "Memory Sequence",
-                        score,
-                        difficulty,
-                        datetime.now().isoformat(
-                            timespec="seconds"
-                        )
-                    )
-                )
-
-                conn.commit()
-
-                voice_success(
-                    f"Your memory game score is {score}.",
-                    language
-                )
-
-                st.session_state.sequence = None
 
                 st.rerun()
 
-            except ValueError:
+        else:
 
-                st.error(
-                    "Enter numbers separated by spaces."
+            sequence = (
+                st.session_state.memory_sequence
+            )
+
+            st.success(
+                "Remember this sequence:"
+            )
+
+            st.markdown(
+                "## " +
+                " • ".join(
+                    str(number)
+                    for number in sequence
                 )
+            )
+
+            answer = st.text_input(
+                "Enter the numbers in the same order",
+                key="memory_answer"
+            )
+
+            if st.button(
+                "Submit Memory Answer",
+                key="memory_submit"
+            ):
+
+                try:
+
+                    user_answer = [
+                        int(x)
+                        for x in re.split(
+                            r"[,\s]+",
+                            answer.strip()
+                        )
+                        if x
+                    ]
+
+                    if len(user_answer) != len(sequence):
+
+                        st.error(
+                            f"Enter exactly "
+                            f"{len(sequence)} numbers."
+                        )
+
+                    else:
+
+                        correct = sum(
+                            a == b
+                            for a, b in zip(
+                                sequence,
+                                user_answer
+                            )
+                        )
+
+                        score = round(
+                            (
+                                correct /
+                                len(sequence)
+                            ) * 100,
+                            1
+                        )
+
+                        conn.execute(
+                            """
+                            INSERT INTO sessions(
+                                user_id,
+                                game,
+                                score,
+                                difficulty,
+                                created_at
+                            )
+                            VALUES(
+                                ?,
+                                ?,
+                                ?,
+                                ?,
+                                ?
+                            )
+                            """,
+                            (
+                                user_id,
+                                "Memory Sequence",
+                                score,
+                                difficulty,
+                                datetime.now().isoformat(
+                                    timespec="seconds"
+                                )
+                            )
+                        )
+
+                        conn.commit()
+
+                        st.session_state.memory_sequence = None
+
+                        announce(
+                            (
+                                f"Memory game completed. "
+                                f"Your score is {score}."
+                            ),
+                            language
+                        )
+
+                        st.rerun()
+
+                except ValueError:
+
+                    st.error(
+                        "Please enter numbers only."
+                    )
+
+
+    # ========================================================
+    # PATTERN MEMORY GAME
+    # ========================================================
+
+    with game_tab2:
+
+        st.subheader(
+            "🔷 Pattern Memory"
+        )
+
+        pattern_length = {
+            1: 4,
+            2: 6,
+            3: 8
+        }[difficulty]
+
+        symbols = [
+            "▲",
+            "●",
+            "■",
+            "◆"
+        ]
+
+        if st.session_state.pattern_sequence is None:
+
+            if st.button(
+                "▶️ Start Pattern Game",
+                type="primary",
+                key="pattern_start"
+            ):
+
+                st.session_state.pattern_sequence = [
+                    random.choice(symbols)
+                    for _ in range(pattern_length)
+                ]
+
+                st.rerun()
+
+        else:
+
+            pattern = (
+                st.session_state.pattern_sequence
+            )
+
+            st.success(
+                "Remember this pattern:"
+            )
+
+            st.markdown(
+                "## " +
+                " ".join(pattern)
+            )
+
+            pattern_answer = st.text_input(
+                "Enter the pattern using symbols",
+                placeholder="Example: ▲ ● ■ ◆",
+                key="pattern_answer"
+            )
+
+            if st.button(
+                "Submit Pattern Answer",
+                key="pattern_submit"
+            ):
+
+                answer_symbols = (
+                    pattern_answer
+                    .strip()
+                    .split()
+                )
+
+                if len(answer_symbols) != len(pattern):
+
+                    st.error(
+                        f"Enter exactly "
+                        f"{len(pattern)} symbols."
+                    )
+
+                else:
+
+                    correct = sum(
+                        a == b
+                        for a, b in zip(
+                            pattern,
+                            answer_symbols
+                        )
+                    )
+
+                    score = round(
+                        (
+                            correct /
+                            len(pattern)
+                        ) * 100,
+                        1
+                    )
+
+                    conn.execute(
+                        """
+                        INSERT INTO sessions(
+                            user_id,
+                            game,
+                            score,
+                            difficulty,
+                            created_at
+                        )
+                        VALUES(
+                            ?,
+                            ?,
+                            ?,
+                            ?,
+                            ?
+                        )
+                        """,
+                        (
+                            user_id,
+                            "Pattern Memory",
+                            score,
+                            difficulty,
+                            datetime.now().isoformat(
+                                timespec="seconds"
+                            )
+                        )
+                    )
+
+                    conn.commit()
+
+                    st.session_state.pattern_sequence = None
+
+                    announce(
+                        (
+                            f"Pattern game completed. "
+                            f"Your score is {score}."
+                        ),
+                        language
+                    )
+
+                    st.rerun()
+
+
+    # ========================================================
+    # ATTENTION GAME
+    # ========================================================
+
+    with game_tab3:
+
+        st.subheader(
+            "⚡ Attention Game"
+        )
+
+        st.write(
+            "Click the target number."
+        )
+
+        if st.session_state.reaction_target is None:
+
+            if st.button(
+                "▶️ Start Attention Game",
+                type="primary",
+                key="attention_start"
+            ):
+
+                st.session_state.reaction_target = (
+                    random.randint(
+                        1,
+                        9
+                    )
+                )
+
+                st.rerun()
+
+        else:
+
+            target = (
+                st.session_state.reaction_target
+            )
+
+            st.markdown(
+                f"## Find: **{target}**"
+            )
+
+            cols = st.columns(3)
+
+            numbers = list(
+                range(1, 10)
+            )
+
+            random.shuffle(numbers)
+
+            for index, number in enumerate(
+                numbers
+            ):
+
+                with cols[index % 3]:
+
+                    if st.button(
+                        str(number),
+                        key=f"attention_{number}"
+                    ):
+
+                        if number == target:
+
+                            score = 100
+
+                            message = (
+                                "Excellent! "
+                                "You selected the correct target."
+                            )
+
+                        else:
+
+                            score = 0
+
+                            message = (
+                                "The selected number "
+                                "was incorrect."
+                            )
+
+                        conn.execute(
+                            """
+                            INSERT INTO sessions(
+                                user_id,
+                                game,
+                                score,
+                                difficulty,
+                                created_at
+                            )
+                            VALUES(
+                                ?,
+                                ?,
+                                ?,
+                                ?,
+                                ?
+                            )
+                            """,
+                            (
+                                user_id,
+                                "Attention Game",
+                                score,
+                                difficulty,
+                                datetime.now().isoformat(
+                                    timespec="seconds"
+                                )
+                            )
+                        )
+
+                        conn.commit()
+
+                        st.session_state.reaction_target = None
+
+                        announce(
+                            (
+                                f"{message} "
+                                f"Your score is {score}."
+                            ),
+                            language
+                        )
+
+                        st.rerun()
 
 
 # ============================================================
 # REMINDERS
 # ============================================================
 
-elif page == "reminders":
+elif selected_page == "reminders":
 
     st.title(
-        "⏰ Reminders"
+        "⏰ " +
+        text(
+            "reminders",
+            language
+        )
     )
 
-    title = st.text_input(
-        "Reminder"
+    st.subheader(
+        "➕ Add New Reminder"
+    )
+
+    reminder_title = st.text_input(
+        "Reminder Title",
+        placeholder="Example: Drink water",
+        key="reminder_title"
     )
 
     reminder_time = st.time_input(
-        "Time",
-        value=time(9, 0)
+        "Reminder Time",
+        value=time(9, 0),
+        key="reminder_time"
     )
 
     if st.button(
-        "Add Reminder",
+        "➕ Add Reminder",
         type="primary"
     ):
 
-        if title:
+        if not reminder_title.strip():
+
+            st.error(
+                "Please enter a reminder."
+            )
+
+        else:
+
+            formatted_time = (
+                reminder_time.strftime(
+                    "%H:%M"
+                )
+            )
 
             conn.execute(
                 """
@@ -1756,21 +3023,29 @@ elif page == "reminders":
                 """,
                 (
                     user_id,
-                    title,
-                    f"{date.today()} "
-                    f"{reminder_time.strftime('%H:%M')}"
+                    reminder_title.strip(),
+                    (
+                        f"{date.today()} "
+                        f"{formatted_time}"
+                    )
                 )
             )
 
             conn.commit()
 
-            voice_success(
-                f"{title} reminder added successfully.",
+            announce(
+                (
+                    f"{reminder_title.strip()} "
+                    f"reminder added successfully "
+                    f"for {formatted_time}."
+                ),
                 language
             )
 
             st.rerun()
 
+
+    st.divider()
 
     reminders = conn.execute(
         """
@@ -1781,71 +3056,115 @@ elif page == "reminders":
             status
         FROM reminders
         WHERE user_id=?
-        ORDER BY due_time
+        ORDER BY id DESC
         """,
-        (user_id,)
+        (
+            user_id,
+        )
     ).fetchall()
 
+    if not reminders:
 
-    for reminder in reminders:
-
-        c1, c2, c3 = st.columns(
-            [4, 2, 1]
+        st.info(
+            "No reminders added yet."
         )
 
-        c1.write(
-            reminder[1]
-        )
+    else:
 
-        c2.write(
-            reminder[2]
-        )
+        for reminder in reminders:
 
-        if reminder[3] == "Done":
-
-            c3.success(
-                "Done"
+            col1, col2, col3, col4 = st.columns(
+                [4, 2, 1, 1]
             )
 
-        elif c3.button(
-            "Done",
-            key=f"done_{reminder[0]}"
-        ):
+            col1.write(
+                f"**{reminder[1]}**"
+            )
 
-            conn.execute(
-                """
-                UPDATE reminders
-                SET status='Done'
-                WHERE id=?
-                AND user_id=?
-                """,
-                (
-                    reminder[0],
-                    user_id
+            col2.write(
+                reminder[2]
+            )
+
+            if reminder[3] == "Done":
+
+                col3.success(
+                    "Done"
                 )
-            )
 
-            conn.commit()
+            else:
 
-            voice_success(
-                f"{reminder[1]} completed successfully.",
-                language
-            )
+                if col3.button(
+                    "Done",
+                    key=f"reminder_done_{reminder[0]}"
+                ):
 
-            st.rerun()
+                    conn.execute(
+                        """
+                        UPDATE reminders
+                        SET status='Done'
+                        WHERE id=?
+                        AND user_id=?
+                        """,
+                        (
+                            reminder[0],
+                            user_id
+                        )
+                    )
+
+                    conn.commit()
+
+                    announce(
+                        (
+                            f"{reminder[1]} "
+                            "completed successfully."
+                        ),
+                        language
+                    )
+
+                    st.rerun()
+
+            if col4.button(
+                "Delete",
+                key=f"reminder_delete_{reminder[0]}"
+            ):
+
+                conn.execute(
+                    """
+                    DELETE FROM reminders
+                    WHERE id=?
+                    AND user_id=?
+                    """,
+                    (
+                        reminder[0],
+                        user_id
+                    )
+                )
+
+                conn.commit()
+
+                announce(
+                    "Reminder deleted successfully.",
+                    language
+                )
+
+                st.rerun()
 
 
 # ============================================================
-# HISTORY
+# PATIENT HISTORY
 # ============================================================
 
-elif page == "history":
+elif selected_page == "history":
 
     st.title(
-        "📜 My History"
+        "📜 " +
+        text(
+            "history",
+            language
+        )
     )
 
-    rows = conn.execute(
+    sessions = conn.execute(
         """
         SELECT
             game,
@@ -1856,39 +3175,78 @@ elif page == "history":
         WHERE user_id=?
         ORDER BY id DESC
         """,
-        (user_id,)
+        (
+            user_id,
+        )
     ).fetchall()
 
-    if rows:
+    if not sessions:
 
-        st.dataframe(
-            [
-                {
-                    "Game": r[0],
-                    "Score": r[1],
-                    "Difficulty": r[2],
-                    "Date": r[3]
-                }
-                for r in rows
-            ],
-            use_container_width=True
+        st.info(
+            text(
+                "no_history",
+                language
+            )
         )
 
     else:
 
-        st.info(
-            "No game history available."
+        st.metric(
+            "Personal Baseline",
+            f"{baseline:.1f}"
         )
 
+        st.dataframe(
+            [
+                {
+                    "Game": row[0],
+                    "Score": row[1],
+                    "Difficulty": row[2],
+                    "Date": row[3]
+                }
+                for row in sessions
+            ],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        scores = [
+            float(row[1])
+            for row in sessions
+        ]
+
+        if scores:
+
+            c1, c2, c3 = st.columns(3)
+
+            c1.metric(
+                "Average",
+                f"{sum(scores) / len(scores):.1f}"
+            )
+
+            c2.metric(
+                "Best",
+                f"{max(scores):.1f}"
+            )
+
+            c3.metric(
+                "Total Sessions",
+                len(scores)
+            )
+
 
 # ============================================================
-# DETAILS
+# PATIENT DETAILS
 # ============================================================
 
-elif page == "details":
+elif selected_page == "details":
 
     st.title(
-        "👤 My Details"
+        "👤 " +
+        text(
+            "details",
+            language
+        )
     )
 
     st.write(
@@ -1900,101 +3258,140 @@ elif page == "details":
     )
 
     st.write(
+        f"**Role:** Patient"
+    )
+
+    st.write(
         f"**Language:** {language}"
     )
 
     st.write(
-        f"**Personal Baseline:** {baseline}"
+        f"**Personal Baseline:** {baseline:.1f}"
+    )
+
+    st.write(
+        f"**Adaptive Difficulty:** {difficulty}/3"
     )
 
     if doctor_id:
 
         doctor = conn.execute(
             """
-            SELECT name
+            SELECT
+                name,
+                username
             FROM users
             WHERE id=?
+            AND role='doctor'
             """,
-            (doctor_id,)
+            (
+                doctor_id,
+            )
         ).fetchone()
 
         if doctor:
 
+            st.success(
+                f"🩺 Assigned Doctor: Dr. {doctor[0]}"
+            )
+
             st.write(
-                f"**Doctor:** Dr. {doctor[0]}"
+                f"Doctor Username: {doctor[1]}"
             )
 
     else:
 
-        st.write(
-            "**Doctor:** Not assigned"
+        st.info(
+            "No doctor assigned."
         )
 
 
 # ============================================================
-# REPORTS
+# PATIENT REPORTS
 # ============================================================
 
-elif page == "reports":
+elif selected_page == "reports":
 
     st.title(
-        "📄 My Performance Reports"
+        "📄 " +
+        text(
+            "reports",
+            language
+        )
     )
 
     reports = conn.execute(
         """
         SELECT
-            title,
-            report_text,
-            created_at,
-            doctor_id
-        FROM reports
-        WHERE patient_id=?
-        ORDER BY id DESC
+            r.id,
+            r.title,
+            r.report_text,
+            r.created_at,
+            d.name
+        FROM reports r
+        INNER JOIN users d
+        ON r.doctor_id=d.id
+        WHERE r.patient_id=?
+        ORDER BY r.id DESC
         """,
-        (user_id,)
+        (
+            user_id,
+        )
     ).fetchall()
 
-    if reports:
+    if not reports:
 
-        for report in reports:
-
-            doctor = conn.execute(
-                """
-                SELECT name
-                FROM users
-                WHERE id=?
-                """,
-                (report[3],)
-            ).fetchone()
-
-            with st.expander(
-                f"{report[0]} — "
-                f"{report[2]}"
-            ):
-
-                if doctor:
-
-                    st.write(
-                        f"🩺 Dr. {doctor[0]}"
-                    )
-
-                st.write(
-                    report[1]
-                )
-
-                if st.button(
-                    "🔊 Read Report",
-                    key=f"read_{report[2]}"
-                ):
-
-                    speak(
-                        report[1],
-                        language
-                    )
+        st.info(
+            text(
+                "no_reports",
+                language
+            )
+        )
 
     else:
 
-        st.info(
-            "No doctor report available yet."
-        )
+        for report in reports:
+
+            with st.expander(
+                f"📄 {report[1]} — {report[3]}"
+            ):
+
+                st.write(
+                    f"🩺 Doctor: Dr. {report[4]}"
+                )
+
+                st.divider()
+
+                st.write(
+                    report[2]
+                )
+
+                if st.button(
+                    "🔊 Listen to Report",
+                    key=f"listen_report_{report[0]}"
+                ):
+
+                    speak(
+                        report[2],
+                        language
+                    )
+
+                    st.success(
+                        "Report audio generated."
+                    )
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "🧠 MINDSETU NER | Cognitive Wellness Prototype"
+)
+
+st.caption(
+    "For demonstration and educational purposes only. "
+    "This prototype does not provide medical diagnosis."
+)
