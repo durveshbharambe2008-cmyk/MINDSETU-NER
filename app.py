@@ -48,6 +48,7 @@ import hashlib
 import io
 import re
 import base64
+import textwrap
 
 from datetime import datetime, date, time
 
@@ -2954,8 +2955,9 @@ st.session_state.page = selected_page
 # ============================================================
 
 if selected_page == "home":
-
-    st.markdown(
+    # Use textwrap.dedent so the HTML is rendered as HTML,
+    # instead of being displayed as a code block.
+    home_html = textwrap.dedent(
         f"""
         <div style="
             padding:25px;
@@ -2967,19 +2969,20 @@ if selected_page == "home":
             );
             color:white;
         ">
-
             <h1>
-                🧠 {text("welcome", language)},
-                {name}!
+                🧠 {text("welcome", language)}, {name}!
             </h1>
 
             <p>
                 Your personalised
                 MINDSETU NER dashboard
             </p>
-
         </div>
-        """,
+        """
+    )
+
+    st.markdown(
+        home_html,
         unsafe_allow_html=True
     )
 
