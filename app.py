@@ -932,33 +932,8 @@ if st.session_state.logged_in:
 
 if not st.session_state.logged_in:
 
-    st.markdown(
-        """
-        <div style="
-            text-align:center;
-            padding:25px;
-            border-radius:20px;
-            background:linear-gradient(
-                135deg,
-                #667eea,
-                #764ba2
-            );
-            color:white;
-        ">
+    # Login / registration starts directly here.
 
-            <h1>🧠 MINDSETU NER</h1>
-
-            <p>
-                Personalised Cognitive &
-                Memory Companion
-            </p>
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.write("")
 
     st.info(
         "MINDSETU NER is a prototype for "
