@@ -1,8 +1,9 @@
 # ============================================================
-# MINDSETU NER - COMPLETE CORRECTED STREAMLIT PROTOTYPE
+# MINDSETU NER - COMPLETE VOICE-FIRST STREAMLIT APP
 # ============================================================
 #
-# Features:
+# FEATURES
+#
 # 1. Patient / Doctor / Admin roles
 # 2. Patient registration and login
 # 3. Admin dashboard
@@ -10,29 +11,33 @@
 # 5. Admin can assign patients to doctors
 # 6. Doctor can see assigned patients only
 # 7. Doctor cannot access games
-# 8. Patient can access cognitive games
+# 8. Patient cognitive games
 # 9. Memory Sequence Game
 # 10. Pattern Memory Game
-# 11. Reaction / Attention Game
+# 11. Attention Game
 # 12. Adaptive difficulty
-# 13. Personal history
-# 14. Personal baseline
-# 15. Reminders
-# 16. Doctor performance reports
-# 17. Patient can view reports
-# 18. Patient can listen to reports
-# 19. Voice welcome after login
-# 20. Voice confirmation after actions
-# 21. Voice commands
-# 22. Multilingual voice output
-# 23. Multilingual voice recognition
-# 24. Multilingual UI labels
-# 25. Patient can see only own information
-# 26. Admin can see all information
+# 13. Difficulty increases after strong performance
+# 14. Difficulty decreases after weak performance
+# 15. Personal history
+# 16. Personal baseline
+# 17. Reminders
+# 18. Doctor reports
+# 19. Patient can listen to reports
+# 20. Hidden voice output
+# 21. Voice welcome after login
+# 22. Voice confirmation after actions
+# 23. Voice commands
+# 24. Multilingual voice output
+# 25. Multilingual voice recognition
+# 26. Multilingual UI
 #
-# Run:
-#     pip install streamlit gTTS SpeechRecognition streamlit-mic-recorder
-#     streamlit run app.py
+# INSTALL:
+#
+# pip install streamlit gTTS SpeechRecognition streamlit-mic-recorder
+#
+# RUN:
+#
+# streamlit run app.py
 #
 # ============================================================
 
@@ -42,18 +47,26 @@ import random
 import hashlib
 import io
 import re
+import base64
+
 from datetime import datetime, date, time
 
-# Optional packages
+
+# ============================================================
+# OPTIONAL PACKAGES
+# ============================================================
+
 try:
     from gtts import gTTS
 except ImportError:
     gTTS = None
 
+
 try:
     import speech_recognition as sr
 except ImportError:
     sr = None
+
 
 try:
     from streamlit_mic_recorder import mic_recorder
@@ -81,6 +94,7 @@ DB_NAME = "mindsetu_ner.db"
 
 
 def get_connection():
+
     connection = sqlite3.connect(
         DB_NAME,
         check_same_thread=False
@@ -95,7 +109,8 @@ def get_connection():
             language TEXT DEFAULT 'English',
             baseline REAL DEFAULT 0,
             role TEXT DEFAULT 'patient',
-            doctor_id INTEGER
+            doctor_id INTEGER,
+            adaptive_difficulty INTEGER DEFAULT 1
         )
     """)
 
@@ -132,6 +147,27 @@ def get_connection():
         )
     """)
 
+    # --------------------------------------------------------
+    # DATABASE MIGRATION FOR OLD DATABASES
+    # --------------------------------------------------------
+
+    columns = connection.execute(
+        "PRAGMA table_info(users)"
+    ).fetchall()
+
+    column_names = [
+        column[1]
+        for column in columns
+    ]
+
+    if "adaptive_difficulty" not in column_names:
+
+        connection.execute("""
+            ALTER TABLE users
+            ADD COLUMN adaptive_difficulty
+            INTEGER DEFAULT 1
+        """)
+
     connection.commit()
 
     return connection
@@ -145,94 +181,117 @@ conn = get_connection()
 # ============================================================
 
 LANGUAGES = {
+
     "English": {
         "code": "en",
         "speech": "en-IN"
     },
+
     "Hindi": {
         "code": "hi",
         "speech": "hi-IN"
     },
+
     "Marathi": {
         "code": "mr",
         "speech": "mr-IN"
     },
+
     "Bengali": {
         "code": "bn",
         "speech": "bn-IN"
     },
+
     "Gujarati": {
         "code": "gu",
         "speech": "gu-IN"
     },
+
     "Tamil": {
         "code": "ta",
         "speech": "ta-IN"
     },
+
     "Telugu": {
         "code": "te",
         "speech": "te-IN"
     },
+
     "Kannada": {
         "code": "kn",
         "speech": "kn-IN"
     },
+
     "Malayalam": {
         "code": "ml",
         "speech": "ml-IN"
     },
+
     "Punjabi": {
         "code": "pa",
         "speech": "pa-IN"
     },
+
     "Urdu": {
         "code": "ur",
         "speech": "ur-PK"
     },
+
     "Nepali": {
         "code": "ne",
         "speech": "ne-NP"
     },
+
     "French": {
         "code": "fr",
         "speech": "fr-FR"
     },
+
     "Spanish": {
         "code": "es",
         "speech": "es-ES"
     },
+
     "German": {
         "code": "de",
         "speech": "de-DE"
     },
+
     "Italian": {
         "code": "it",
         "speech": "it-IT"
     },
+
     "Portuguese": {
         "code": "pt",
         "speech": "pt-PT"
     },
+
     "Arabic": {
         "code": "ar",
         "speech": "ar-SA"
     },
+
     "Chinese": {
         "code": "zh-CN",
         "speech": "zh-CN"
     },
+
     "Japanese": {
         "code": "ja",
         "speech": "ja-JP"
     },
+
     "Korean": {
         "code": "ko",
         "speech": "ko-KR"
     },
+
     "Russian": {
         "code": "ru",
         "speech": "ru-RU"
     },
+
     "Turkish": {
         "code": "tr",
         "speech": "tr-TR"
@@ -247,6 +306,7 @@ LANGUAGES = {
 TRANSLATIONS = {
 
     "English": {
+
         "home": "Home",
         "games": "Cognitive Games",
         "reminders": "Reminders",
@@ -274,6 +334,7 @@ TRANSLATIONS = {
     },
 
     "Hindi": {
+
         "home": "होम",
         "games": "संज्ञानात्मक खेल",
         "reminders": "रिमाइंडर",
@@ -301,6 +362,7 @@ TRANSLATIONS = {
     },
 
     "Marathi": {
+
         "home": "मुख्यपृष्ठ",
         "games": "संज्ञानात्मक खेळ",
         "reminders": "स्मरणपत्रे",
@@ -328,6 +390,7 @@ TRANSLATIONS = {
     },
 
     "Gujarati": {
+
         "home": "હોમ",
         "games": "કોગ્નિટિવ ગેમ્સ",
         "reminders": "રિમાઇન્ડર્સ",
@@ -355,6 +418,7 @@ TRANSLATIONS = {
     },
 
     "Tamil": {
+
         "home": "முகப்பு",
         "games": "அறிவாற்றல் விளையாட்டுகள்",
         "reminders": "நினைவூட்டல்கள்",
@@ -382,6 +446,7 @@ TRANSLATIONS = {
     },
 
     "Telugu": {
+
         "home": "హోమ్",
         "games": "కాగ్నిటివ్ గేమ్స్",
         "reminders": "రిమైండర్లు",
@@ -409,6 +474,7 @@ TRANSLATIONS = {
     },
 
     "Bengali": {
+
         "home": "হোম",
         "games": "কগনিটিভ গেম",
         "reminders": "রিমাইন্ডার",
@@ -438,10 +504,7 @@ TRANSLATIONS = {
 
 
 def text(key, language):
-    """
-    Returns translated UI text.
-    Falls back to English if translation is unavailable.
-    """
+
     language_dict = TRANSLATIONS.get(
         language,
         TRANSLATIONS["English"]
@@ -461,6 +524,7 @@ def text(key, language):
 # ============================================================
 
 def hash_password(password):
+
     return hashlib.sha256(
         password.encode("utf-8")
     ).hexdigest()
@@ -470,24 +534,29 @@ def hash_password(password):
 # VOICE OUTPUT
 # ============================================================
 
-def speak(message, language="English"):
+def generate_voice_html(
+    message,
+    language="English"
+):
 
     if not message:
-        return
+        return ""
 
     if gTTS is None:
-        return
+        return ""
 
     try:
 
         audio_buffer = io.BytesIO()
 
+        language_code = LANGUAGES.get(
+            language,
+            LANGUAGES["English"]
+        )["code"]
+
         gTTS(
             text=message,
-            lang=LANGUAGES.get(
-                language,
-                LANGUAGES["English"]
-            )["code"],
+            lang=language_code,
             slow=False
         ).write_to_fp(
             audio_buffer
@@ -495,21 +564,135 @@ def speak(message, language="English"):
 
         audio_buffer.seek(0)
 
-        st.audio(
-            audio_buffer.read(),
-            format="audio/mp3",
-            autoplay=True
-        )
+        audio_base64 = base64.b64encode(
+            audio_buffer.read()
+        ).decode("utf-8")
+
+        html = f"""
+        <div style="
+            width:1px;
+            height:1px;
+            overflow:hidden;
+            position:absolute;
+            left:-9999px;
+            top:-9999px;
+        ">
+
+            <audio
+                id="mindsetuVoice"
+                autoplay
+                playsinline
+                preload="auto"
+            >
+
+                <source
+                    src="data:audio/mpeg;base64,{audio_base64}"
+                    type="audio/mpeg"
+                >
+
+            </audio>
+
+            <script>
+
+                const audio =
+                    document.getElementById(
+                        "mindsetuVoice"
+                    );
+
+                if (audio) {{
+
+                    audio.volume = 1.0;
+
+                    const playAudio = () => {{
+
+                        audio.play().catch(
+                            () => {{}}
+                        );
+
+                    }};
+
+                    playAudio();
+
+                }}
+
+            </script>
+
+        </div>
+        """
+
+        return html
 
     except Exception:
-        pass
+        return ""
 
 
-def announce(message, language="English"):
+def queue_voice(
+    message,
+    language="English"
+):
 
-    st.success("🔊 " + message)
+    if not message:
+        return
 
-    speak(
+    st.session_state.pending_voice_message = (
+        message
+    )
+
+    st.session_state.pending_voice_language = (
+        language
+    )
+
+
+def play_pending_voice():
+
+    message = st.session_state.get(
+        "pending_voice_message"
+    )
+
+    language = st.session_state.get(
+        "pending_voice_language",
+        "English"
+    )
+
+    if not message:
+        return
+
+    # Clear first so the same message isn't played
+    # on every rerun.
+    st.session_state.pending_voice_message = None
+    st.session_state.pending_voice_language = None
+
+    html = generate_voice_html(
+        message,
+        language
+    )
+
+    if html:
+
+        st.html(
+            html,
+            width=1,
+            unsafe_allow_javascript=True
+        )
+
+
+def announce(
+    message,
+    language="English"
+):
+
+    # IMPORTANT:
+    #
+    # This function intentionally does NOT call:
+    #
+    # st.success()
+    # st.info()
+    # st.write()
+    # st.audio()
+    #
+    # It is voice-only.
+
+    queue_voice(
         message,
         language
     )
@@ -525,6 +708,9 @@ def recognize_voice(
 ):
 
     if sr is None:
+        return None
+
+    if not audio_bytes:
         return None
 
     try:
@@ -565,6 +751,13 @@ def parse_time_from_command(command):
     if not command:
         return None
 
+    # --------------------------------------------------------
+    # 24-hour format
+    #
+    # 17:30
+    # 09:15
+    # --------------------------------------------------------
+
     match = re.search(
         r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b",
         command
@@ -582,7 +775,101 @@ def parse_time_from_command(command):
 
         return f"{hour:02d}:{minute:02d}"
 
+    # --------------------------------------------------------
+    # 12-hour format
+    #
+    # 5 PM
+    # 5:30 PM
+    # 10 AM
+    # --------------------------------------------------------
+
+    match = re.search(
+        r"\b(1[0-2]|0?[1-9])"
+        r"(?:[:.]([0-5]\d))?"
+        r"\s*(am|pm)\b",
+        command,
+        re.IGNORECASE
+    )
+
+    if match:
+
+        hour = int(
+            match.group(1)
+        )
+
+        minute = int(
+            match.group(2) or 0
+        )
+
+        am_pm = match.group(3).lower()
+
+        if am_pm == "pm" and hour != 12:
+            hour += 12
+
+        if am_pm == "am" and hour == 12:
+            hour = 0
+
+        return f"{hour:02d}:{minute:02d}"
+
     return None
+
+
+# ============================================================
+# REMINDER TITLE FROM VOICE COMMAND
+# ============================================================
+
+def extract_reminder_title(command):
+
+    title = command.strip()
+
+    phrases = [
+
+        "add a reminder",
+        "add reminder",
+
+        "set a reminder",
+        "set reminder",
+
+        "create a reminder",
+        "create reminder",
+
+        "set a time for",
+        "set time for",
+
+        "remind me to",
+        "remind me"
+    ]
+
+    for phrase in phrases:
+
+        title = title.replace(
+            phrase,
+            ""
+        )
+
+    title = re.sub(
+        r"\b(?:at|for)\s+"
+        r"(?:[01]?\d|2[0-3])[:.][0-5]\d\b",
+        "",
+        title
+    )
+
+    title = re.sub(
+        r"\b(?:at|for)\s+"
+        r"(?:1[0-2]|0?[1-9])"
+        r"(?:[:.][0-5]\d)?"
+        r"\s*(?:am|pm)\b",
+        "",
+        title,
+        flags=re.IGNORECASE
+    )
+
+    title = title.strip()
+
+    if not title:
+        title = "Reminder"
+
+    return title[0].upper() + title[1:]
 
 
 # ============================================================
@@ -590,17 +877,33 @@ def parse_time_from_command(command):
 # ============================================================
 
 DEFAULT_SESSION_VALUES = {
+
     "logged_in": False,
+
     "user_id": None,
+
     "name": "",
+
     "username": "",
+
     "role": None,
+
     "language": "English",
+
     "doctor_id": None,
+
     "page": "home",
+
     "welcome_pending": False,
+
+    "pending_voice_message": None,
+
+    "pending_voice_language": None,
+
     "memory_sequence": None,
+
     "pattern_sequence": None,
+
     "reaction_target": None
 }
 
@@ -610,6 +913,15 @@ for key, value in DEFAULT_SESSION_VALUES.items():
     if key not in st.session_state:
 
         st.session_state[key] = value
+
+
+# ============================================================
+# PLAY PENDING VOICE
+# ============================================================
+
+if st.session_state.logged_in:
+
+    play_pending_voice()
 
 
 # ============================================================
@@ -624,11 +936,21 @@ if not st.session_state.logged_in:
             text-align:center;
             padding:25px;
             border-radius:20px;
-            background:linear-gradient(135deg,#667eea,#764ba2);
+            background:linear-gradient(
+                135deg,
+                #667eea,
+                #764ba2
+            );
             color:white;
         ">
+
             <h1>🧠 MINDSETU NER</h1>
-            <p>Personalised Cognitive & Memory Companion</p>
+
+            <p>
+                Personalised Cognitive &
+                Memory Companion
+            </p>
+
         </div>
         """,
         unsafe_allow_html=True
@@ -637,8 +959,8 @@ if not st.session_state.logged_in:
     st.write("")
 
     st.info(
-        "MINDSETU NER is a prototype for cognitive "
-        "wellness and performance tracking. "
+        "MINDSETU NER is a prototype for "
+        "cognitive wellness and performance tracking. "
         "It is not a medical diagnostic system."
     )
 
@@ -648,7 +970,6 @@ if not st.session_state.logged_in:
             "📝 Patient Registration"
         ]
     )
-
 
     # ========================================================
     # LOGIN
@@ -675,10 +996,12 @@ if not st.session_state.logged_in:
             use_container_width=True
         ):
 
-            username_clean = username.strip()
+            username_clean = (
+                username.strip()
+            )
 
             # ------------------------------------------------
-            # ADMIN LOGIN
+            # ADMIN
             # ------------------------------------------------
 
             if username_clean.lower() == "admin":
@@ -693,6 +1016,12 @@ if not st.session_state.logged_in:
                     st.session_state.language = "English"
                     st.session_state.page = "home"
 
+                    queue_voice(
+                        "Welcome Administrator. "
+                        "You have logged in successfully.",
+                        "English"
+                    )
+
                     st.rerun()
 
                 else:
@@ -702,7 +1031,7 @@ if not st.session_state.logged_in:
                     )
 
             # ------------------------------------------------
-            # NORMAL USER LOGIN
+            # NORMAL USER
             # ------------------------------------------------
 
             else:
@@ -716,11 +1045,14 @@ if not st.session_state.logged_in:
                         password_hash,
                         language,
                         role,
-                        doctor_id
+                        doctor_id,
+                        adaptive_difficulty
                     FROM users
                     WHERE LOWER(username)=LOWER(?)
                     """,
-                    (username_clean,)
+                    (
+                        username_clean,
+                    )
                 ).fetchone()
 
                 if user is None:
@@ -748,10 +1080,41 @@ if not st.session_state.logged_in:
                     st.session_state.role = user[5]
                     st.session_state.doctor_id = user[6]
                     st.session_state.page = "home"
-                    st.session_state.welcome_pending = True
+
+                    queue_voice(
+                        (
+                            f"Welcome {user[1]}. "
+                            "You have logged in successfully."
+                        ),
+                        user[4]
+                    )
+
+                    if user[5] == "patient":
+
+                        queue_voice(
+                            (
+                                f"Welcome {user[1]}. "
+                                "You have logged in successfully. "
+                                "Now you can play cognitive games, "
+                                "set reminders, check your history, "
+                                "and listen to your reports."
+                            ),
+                            user[4]
+                        )
+
+                    elif user[5] == "doctor":
+
+                        queue_voice(
+                            (
+                                f"Welcome Dr. {user[1]}. "
+                                "You have logged in successfully. "
+                                "You can review your assigned patients "
+                                "and manage their reports."
+                            ),
+                            user[4]
+                        )
 
                     st.rerun()
-
 
     # ========================================================
     # REGISTRATION
@@ -812,7 +1175,8 @@ if not st.session_state.logged_in:
             elif len(reg_password) < 6:
 
                 st.error(
-                    "Password must contain at least 6 characters."
+                    "Password must contain at least "
+                    "6 characters."
                 )
 
             elif reg_password != reg_confirm:
@@ -850,7 +1214,8 @@ if not st.session_state.logged_in:
                             password_hash,
                             language,
                             baseline,
-                            role
+                            role,
+                            adaptive_difficulty
                         )
                         VALUES(
                             ?,
@@ -858,7 +1223,8 @@ if not st.session_state.logged_in:
                             ?,
                             ?,
                             0,
-                            'patient'
+                            'patient',
+                            1
                         )
                         """,
                         (
@@ -877,7 +1243,7 @@ if not st.session_state.logged_in:
                         "Patient account created successfully."
                     )
 
-                    speak(
+                    queue_voice(
                         (
                             f"Welcome {reg_name.strip()}. "
                             "Your patient account has been "
@@ -886,11 +1252,14 @@ if not st.session_state.logged_in:
                         reg_language
                     )
 
+                    # Play the queued registration voice.
+                    play_pending_voice()
+
     st.stop()
 
 
 # ============================================================
-# LOAD SESSION USER
+# CURRENT SESSION USER
 # ============================================================
 
 role = st.session_state.role
@@ -900,34 +1269,13 @@ language = st.session_state.language
 
 
 # ============================================================
-# WELCOME VOICE
-# ============================================================
-
-if st.session_state.welcome_pending:
-
-    st.session_state.welcome_pending = False
-
-    announce(
-        (
-            f"Welcome {name}. "
-            "You have logged in successfully."
-        ),
-        language
-    )
-
-
-# ============================================================
-# ADMIN
+# ADMIN DASHBOARD
 # ============================================================
 
 if role == "admin":
 
     st.title(
         "👑 MINDSETU NER — Administrator Dashboard"
-    )
-
-    st.caption(
-        "Administrator has access to overall system information."
     )
 
     admin_tabs = st.tabs(
@@ -941,9 +1289,8 @@ if role == "admin":
         ]
     )
 
-
     # ========================================================
-    # ADMIN OVERVIEW
+    # OVERVIEW
     # ========================================================
 
     with admin_tabs[0]:
@@ -1000,9 +1347,8 @@ if role == "admin":
             report_count
         )
 
-
     # ========================================================
-    # ADMIN PATIENTS
+    # PATIENTS
     # ========================================================
 
     with admin_tabs[1]:
@@ -1015,51 +1361,54 @@ if role == "admin":
                 username,
                 language,
                 baseline,
-                doctor_id
+                doctor_id,
+                adaptive_difficulty
             FROM users
             WHERE role='patient'
             ORDER BY name
             """
         ).fetchall()
 
-        if patients:
+        patient_data = []
 
-            patient_data = []
+        for patient_row in patients:
 
-            for patient in patients:
+            doctor_name = "Not assigned"
 
-                doctor_name = "Not assigned"
+            if patient_row[5]:
 
-                if patient[5]:
+                doctor = conn.execute(
+                    """
+                    SELECT name
+                    FROM users
+                    WHERE id=?
+                    AND role='doctor'
+                    """,
+                    (
+                        patient_row[5],
+                    )
+                ).fetchone()
 
-                    doctor = conn.execute(
-                        """
-                        SELECT name
-                        FROM users
-                        WHERE id=?
-                        AND role='doctor'
-                        """,
-                        (
-                            patient[5],
-                        )
-                    ).fetchone()
+                if doctor:
 
-                    if doctor:
-                        doctor_name = (
-                            "Dr. " +
-                            doctor[0]
-                        )
+                    doctor_name = (
+                        "Dr. " +
+                        doctor[0]
+                    )
 
-                patient_data.append(
-                    {
-                        "ID": patient[0],
-                        "Name": patient[1],
-                        "Username": patient[2],
-                        "Language": patient[3],
-                        "Baseline": patient[4],
-                        "Doctor": doctor_name
-                    }
-                )
+            patient_data.append(
+                {
+                    "ID": patient_row[0],
+                    "Name": patient_row[1],
+                    "Username": patient_row[2],
+                    "Language": patient_row[3],
+                    "Baseline": patient_row[4],
+                    "Difficulty": patient_row[6],
+                    "Doctor": doctor_name
+                }
+            )
+
+        if patient_data:
 
             st.dataframe(
                 patient_data,
@@ -1073,9 +1422,8 @@ if role == "admin":
                 "No patients registered."
             )
 
-
     # ========================================================
-    # ADMIN DOCTORS
+    # DOCTORS
     # ========================================================
 
     with admin_tabs[2]:
@@ -1120,7 +1468,8 @@ if role == "admin":
             elif len(doctor_password) < 6:
 
                 st.error(
-                    "Doctor password must contain at least 6 characters."
+                    "Doctor password must contain "
+                    "at least 6 characters."
                 )
 
             else:
@@ -1152,7 +1501,8 @@ if role == "admin":
                             password_hash,
                             language,
                             baseline,
-                            role
+                            role,
+                            adaptive_difficulty
                         )
                         VALUES(
                             ?,
@@ -1160,7 +1510,8 @@ if role == "admin":
                             ?,
                             'English',
                             0,
-                            'doctor'
+                            'doctor',
+                            1
                         )
                         """,
                         (
@@ -1180,7 +1531,6 @@ if role == "admin":
                     )
 
                     st.rerun()
-
 
         st.subheader(
             "🩺 Registered Doctors"
@@ -1218,7 +1568,6 @@ if role == "admin":
             st.info(
                 "No doctors added yet."
             )
-
 
     # ========================================================
     # ASSIGN PATIENTS
@@ -1321,7 +1670,6 @@ if role == "admin":
 
                 st.rerun()
 
-
             st.subheader(
                 "Current Assignments"
             )
@@ -1357,9 +1705,8 @@ if role == "admin":
                 hide_index=True
             )
 
-
     # ========================================================
-    # ADMIN SESSIONS
+    # ALL SESSIONS
     # ========================================================
 
     with admin_tabs[4]:
@@ -1404,9 +1751,8 @@ if role == "admin":
                 "No sessions available."
             )
 
-
     # ========================================================
-    # ADMIN REPORTS
+    # ALL REPORTS
     # ========================================================
 
     with admin_tabs[5]:
@@ -1454,8 +1800,9 @@ if role == "admin":
                 "No reports available."
             )
 
-
+    # ========================================================
     # ADMIN LOGOUT
+    # ========================================================
 
     st.divider()
 
@@ -1496,10 +1843,6 @@ if role == "doctor":
         ]
     )
 
-    # --------------------------------------------------------
-    # GET ASSIGNED PATIENTS
-    # --------------------------------------------------------
-
     assigned_patients = conn.execute(
         """
         SELECT
@@ -1517,7 +1860,6 @@ if role == "doctor":
             user_id,
         )
     ).fetchall()
-
 
     # ========================================================
     # DOCTOR OVERVIEW
@@ -1541,7 +1883,6 @@ if role == "doctor":
             "🎮 Cognitive games are not available "
             "for doctor accounts."
         )
-
 
     # ========================================================
     # DOCTOR PATIENTS
@@ -1571,7 +1912,6 @@ if role == "doctor":
                 "No patients have been assigned to you."
             )
 
-
     # ========================================================
     # DOCTOR PERFORMANCE
     # ========================================================
@@ -1597,14 +1937,15 @@ if role == "doctor":
                 selected_patient_name
             ]
 
-            patient = conn.execute(
+            patient_data = conn.execute(
                 """
                 SELECT
                     id,
                     name,
                     username,
                     language,
-                    baseline
+                    baseline,
+                    adaptive_difficulty
                 FROM users
                 WHERE id=?
                 AND role='patient'
@@ -1616,17 +1957,22 @@ if role == "doctor":
                 )
             ).fetchone()
 
-            if patient:
+            if patient_data:
 
                 st.subheader(
-                    f"👤 {patient[1]}"
+                    f"👤 {patient_data[1]}"
                 )
 
                 c1, c2, c3 = st.columns(3)
 
                 c1.metric(
                     "Baseline",
-                    f"{patient[4]:.1f}"
+                    f"{patient_data[4]:.1f}"
+                )
+
+                c2.metric(
+                    "Difficulty",
+                    patient_data[5]
                 )
 
                 sessions = conn.execute(
@@ -1699,21 +2045,8 @@ if role == "doctor":
                         "No game sessions recorded."
                     )
 
-            else:
-
-                st.error(
-                    "Patient access denied."
-                )
-
-        else:
-
-            st.info(
-                "No patients assigned."
-            )
-
-
     # ========================================================
-    # DOCTOR SEND REPORT
+    # SEND REPORT
     # ========================================================
 
     with doctor_tabs[3]:
@@ -1739,8 +2072,7 @@ if role == "doctor":
 
             sessions = conn.execute(
                 """
-                SELECT
-                    score
+                SELECT score
                 FROM sessions
                 WHERE user_id=?
                 """,
@@ -1806,9 +2138,6 @@ if role == "doctor":
                 type="primary"
             ):
 
-                # Security check:
-                # Doctor can only send to assigned patient.
-
                 valid_patient = conn.execute(
                     """
                     SELECT id
@@ -1871,8 +2200,10 @@ if role == "doctor":
                     conn.commit()
 
                     announce(
-                        "Overall performance report "
-                        "sent successfully to the patient.",
+                        (
+                            "Overall performance report "
+                            "sent successfully to the patient."
+                        ),
                         "English"
                     )
 
@@ -1883,7 +2214,6 @@ if role == "doctor":
             st.info(
                 "Assign patients before sending reports."
             )
-
 
     # ========================================================
     # DOCTOR LOGOUT
@@ -1904,7 +2234,7 @@ if role == "doctor":
 
 
 # ============================================================
-# PATIENT ACCOUNT
+# LOAD PATIENT
 # ============================================================
 
 patient = conn.execute(
@@ -1916,7 +2246,8 @@ patient = conn.execute(
         language,
         baseline,
         role,
-        doctor_id
+        doctor_id,
+        adaptive_difficulty
     FROM users
     WHERE id=?
     AND role='patient'
@@ -1938,7 +2269,10 @@ if patient is None:
     st.stop()
 
 
-# Refresh patient information
+# ============================================================
+# REFRESH PATIENT INFORMATION
+# ============================================================
+
 user_id = patient[0]
 name = patient[1]
 username = patient[2]
@@ -1947,10 +2281,12 @@ doctor_id = patient[6]
 
 
 # ============================================================
-# PATIENT BASELINE
+# BASELINE
 # ============================================================
 
-def calculate_baseline(patient_id):
+def calculate_baseline(
+    patient_id
+):
 
     rows = conn.execute(
         """
@@ -1966,6 +2302,7 @@ def calculate_baseline(patient_id):
     ).fetchall()
 
     if not rows:
+
         return 0.0
 
     return round(
@@ -1983,23 +2320,179 @@ baseline = calculate_baseline(
 
 
 # ============================================================
-# ADAPTIVE DIFFICULTY
+# GET CURRENT DIFFICULTY
 # ============================================================
 
-def calculate_difficulty(baseline_score):
+difficulty_row = conn.execute(
+    """
+    SELECT adaptive_difficulty
+    FROM users
+    WHERE id=?
+    AND role='patient'
+    """,
+    (
+        user_id,
+    )
+).fetchone()
 
-    if baseline_score >= 85:
-        return 3
 
-    if baseline_score >= 65:
-        return 2
+if difficulty_row:
 
-    return 1
+    difficulty = int(
+        difficulty_row[0] or 1
+    )
+
+else:
+
+    difficulty = 1
 
 
-difficulty = calculate_difficulty(
-    baseline
+difficulty = max(
+    1,
+    min(
+        difficulty,
+        3
+    )
 )
+
+
+# ============================================================
+# UPDATE DIFFICULTY
+# ============================================================
+
+def update_adaptive_difficulty(
+    patient_id,
+    score
+):
+
+    row = conn.execute(
+        """
+        SELECT adaptive_difficulty
+        FROM users
+        WHERE id=?
+        AND role='patient'
+        """,
+        (
+            patient_id,
+        )
+    ).fetchone()
+
+    if row:
+
+        old_difficulty = int(
+            row[0] or 1
+        )
+
+    else:
+
+        old_difficulty = 1
+
+    # --------------------------------------------------------
+    # STRONG PERFORMANCE
+    # --------------------------------------------------------
+
+    if score >= 70:
+
+        new_difficulty = min(
+            old_difficulty + 1,
+            3
+        )
+
+        result = "won"
+
+    # --------------------------------------------------------
+    # WEAK PERFORMANCE
+    # --------------------------------------------------------
+
+    else:
+
+        new_difficulty = max(
+            old_difficulty - 1,
+            1
+        )
+
+        result = "lost"
+
+    conn.execute(
+        """
+        UPDATE users
+        SET adaptive_difficulty=?
+        WHERE id=?
+        AND role='patient'
+        """,
+        (
+            new_difficulty,
+            patient_id
+        )
+    )
+
+    conn.commit()
+
+    return (
+        old_difficulty,
+        new_difficulty,
+        result
+    )
+
+
+# ============================================================
+# GAME COMPLETION VOICE
+# ============================================================
+
+def game_result_voice(
+    game_name,
+    score,
+    old_difficulty,
+    new_difficulty,
+    language
+):
+
+    if score >= 70:
+
+        message = (
+            f"Congratulations! "
+            f"You completed the {game_name} "
+            f"with a score of {score}. "
+        )
+
+        if new_difficulty > old_difficulty:
+
+            message += (
+                f"Excellent performance. "
+                f"Your difficulty has increased "
+                f"to level {new_difficulty}."
+            )
+
+        else:
+
+            message += (
+                f"Your difficulty remains at "
+                f"level {new_difficulty}."
+            )
+
+    else:
+
+        message = (
+            f"You completed the {game_name} "
+            f"with a score of {score}. "
+        )
+
+        if new_difficulty < old_difficulty:
+
+            message += (
+                f"Keep practicing. "
+                f"Your difficulty has been adjusted "
+                f"to level {new_difficulty}."
+            )
+
+        else:
+
+            message += (
+                f"Your difficulty remains at "
+                f"level {new_difficulty}."
+            )
+
+    return message
 
 
 # ============================================================
@@ -2017,10 +2510,14 @@ with st.sidebar:
     )
 
     st.caption(
-        f"Role: Patient"
+        "Role: Patient"
     )
 
     st.divider()
+
+    # ========================================================
+    # LANGUAGE
+    # ========================================================
 
     st.subheader(
         "🌐 " +
@@ -2068,7 +2565,7 @@ with st.sidebar:
             selected_language
         )
 
-        announce(
+        queue_voice(
             (
                 "Language changed to "
                 f"{selected_language} successfully."
@@ -2078,7 +2575,6 @@ with st.sidebar:
 
         st.rerun()
 
-
     # ========================================================
     # VOICE COMMANDS
     # ========================================================
@@ -2086,7 +2582,7 @@ with st.sidebar:
     st.divider()
 
     st.subheader(
-        "🎤 Voice Commands"
+        "🎤 Voice"
     )
 
     if mic_recorder is None:
@@ -2098,8 +2594,9 @@ with st.sidebar:
     else:
 
         audio_data = mic_recorder(
-            start_prompt="🎤 Start Voice",
-            stop_prompt="⏹ Stop Voice",
+            start_prompt="🎤",
+            stop_prompt="⏹️",
+            just_once=True,
             key="patient_voice_recorder"
         )
 
@@ -2110,15 +2607,21 @@ with st.sidebar:
                 language
             )
 
+            # ------------------------------------------------
+            # IMPORTANT:
+            #
+            # We NEVER display:
+            #
+            # st.success(command)
+            #
+            # Therefore the user's speech is not shown.
+            # ------------------------------------------------
+
             if command:
 
-                st.success(
-                    f"Recognized: {command}"
-                )
-
-                # --------------------------------------------
+                # =================================================
                 # LOGOUT
-                # --------------------------------------------
+                # =================================================
 
                 if (
                     "logout" in command
@@ -2126,46 +2629,49 @@ with st.sidebar:
                     or "exit" in command
                 ):
 
-                    announce(
+                    queue_voice(
                         "Logging out now.",
                         language
                     )
 
-                    st.session_state.clear()
+                    st.session_state.logged_in = False
 
                     st.rerun()
 
-
-                # --------------------------------------------
+                # =================================================
                 # GAMES
-                # --------------------------------------------
+                # =================================================
 
                 elif (
                     "game" in command
                     or "games" in command
                     or "play" in command
+                    or "cognitive" in command
                 ):
 
                     st.session_state.page = "games"
 
-                    announce(
-                        "Opening cognitive games.",
+                    queue_voice(
+                        (
+                            "Opening cognitive games. "
+                            "You can start a game whenever you are ready."
+                        ),
                         language
                     )
 
                     st.rerun()
 
-
-                # --------------------------------------------
+                # =================================================
                 # REMINDERS
-                # --------------------------------------------
+                # =================================================
 
                 elif (
                     "reminder" in command
                     or "reminders" in command
+                    or "remind me" in command
+                    or "set time" in command
+                    or "set a time" in command
                 ):
-
-                    st.session_state.page = "reminders"
 
                     reminder_time = (
                         parse_time_from_command(
@@ -2173,49 +2679,13 @@ with st.sidebar:
                         )
                     )
 
-                    if (
-                        reminder_time
-                        and (
-                            "add" in command
-                            or "set" in command
-                            or "create" in command
-                        )
-                    ):
-
-                        reminder_title = command
-
-                        for phrase in [
-                            "add reminder",
-                            "set reminder",
-                            "create reminder",
-                            "add a reminder",
-                            "set a reminder",
-                            "create a reminder"
-                        ]:
-
-                            reminder_title = (
-                                reminder_title
-                                .replace(
-                                    phrase,
-                                    ""
-                                )
-                            )
-
-                        reminder_title = re.sub(
-                            r"\b(?:at|for)\s+\d{1,2}[:.]\d{2}\b",
-                            "",
-                            reminder_title
-                        )
+                    if reminder_time:
 
                         reminder_title = (
-                            reminder_title
-                            .strip()
-                            .title()
+                            extract_reminder_title(
+                                command
+                            )
                         )
-
-                        if not reminder_title:
-
-                            reminder_title = "Reminder"
 
                         conn.execute(
                             """
@@ -2244,10 +2714,10 @@ with st.sidebar:
 
                         conn.commit()
 
-                        announce(
+                        queue_voice(
                             (
                                 f"{reminder_title} "
-                                f"reminder added successfully "
+                                f"reminder has been added "
                                 f"for {reminder_time}."
                             ),
                             language
@@ -2255,17 +2725,23 @@ with st.sidebar:
 
                     else:
 
-                        announce(
-                            "Opening your reminders.",
+                        queue_voice(
+                            (
+                                "I heard the reminder request, "
+                                "but I could not understand the time. "
+                                "Please say something like "
+                                "set reminder drink water at 5 PM."
+                            ),
                             language
                         )
 
+                    st.session_state.page = "reminders"
+
                     st.rerun()
 
-
-                # --------------------------------------------
-                # REPORT
-                # --------------------------------------------
+                # =================================================
+                # REPORTS
+                # =================================================
 
                 elif (
                     "report" in command
@@ -2274,17 +2750,16 @@ with st.sidebar:
 
                     st.session_state.page = "reports"
 
-                    announce(
+                    queue_voice(
                         "Opening your reports.",
                         language
                     )
 
                     st.rerun()
 
-
-                # --------------------------------------------
+                # =================================================
                 # HISTORY
-                # --------------------------------------------
+                # =================================================
 
                 elif (
                     "history" in command
@@ -2293,17 +2768,16 @@ with st.sidebar:
 
                     st.session_state.page = "history"
 
-                    announce(
+                    queue_voice(
                         "Opening your performance history.",
                         language
                     )
 
                     st.rerun()
 
-
-                # --------------------------------------------
+                # =================================================
                 # DETAILS
-                # --------------------------------------------
+                # =================================================
 
                 elif (
                     "details" in command
@@ -2313,17 +2787,16 @@ with st.sidebar:
 
                     st.session_state.page = "details"
 
-                    announce(
+                    queue_voice(
                         "Opening your details.",
                         language
                     )
 
                     st.rerun()
 
-
-                # --------------------------------------------
+                # =================================================
                 # HOME
-                # --------------------------------------------
+                # =================================================
 
                 elif (
                     "home" in command
@@ -2332,27 +2805,53 @@ with st.sidebar:
 
                     st.session_state.page = "home"
 
-                    announce(
+                    queue_voice(
                         "Opening your dashboard.",
                         language
                     )
 
                     st.rerun()
 
+                # =================================================
+                # UNKNOWN COMMAND
+                # =================================================
+
                 else:
 
-                    st.warning(
-                        "Command not recognized."
+                    queue_voice(
+                        (
+                            "Sorry, I did not understand "
+                            "that command. "
+                            "You can say open games, "
+                            "open reminders, "
+                            "open reports, "
+                            "open history, "
+                            "open details, "
+                            "go home, "
+                            "or logout."
+                        ),
+                        language
                     )
 
-                    st.caption(
-                        "Try: open games, open reminders, "
-                        "open reports, open history, "
-                        "open details, or logout."
-                    )
+                    st.rerun()
 
+            else:
+
+                queue_voice(
+                    (
+                        "Sorry, I could not understand "
+                        "your voice. Please try again."
+                    ),
+                    language
+                )
+
+                st.rerun()
 
     st.divider()
+
+    # ========================================================
+    # LOGOUT BUTTON
+    # ========================================================
 
     if st.button(
         "🚪 " +
@@ -2363,7 +2862,12 @@ with st.sidebar:
         use_container_width=True
     ):
 
-        st.session_state.clear()
+        queue_voice(
+            "Logging out now. Goodbye.",
+            language
+        )
+
+        st.session_state.logged_in = False
 
         st.rerun()
 
@@ -2373,23 +2877,63 @@ with st.sidebar:
 # ============================================================
 
 page_names = {
-    "home": "🏠 " + text("home", language),
-    "games": "🎮 " + text("games", language),
-    "reminders": "⏰ " + text("reminders", language),
-    "history": "📜 " + text("history", language),
-    "details": "👤 " + text("details", language),
-    "reports": "📄 " + text("reports", language)
+
+    "home":
+        "🏠 " +
+        text(
+            "home",
+            language
+        ),
+
+    "games":
+        "🎮 " +
+        text(
+            "games",
+            language
+        ),
+
+    "reminders":
+        "⏰ " +
+        text(
+            "reminders",
+            language
+        ),
+
+    "history":
+        "📜 " +
+        text(
+            "history",
+            language
+        ),
+
+    "details":
+        "👤 " +
+        text(
+            "details",
+            language
+        ),
+
+    "reports":
+        "📄 " +
+        text(
+            "reports",
+            language
+        )
 }
+
 
 page_keys = list(
     page_names.keys()
 )
 
+
 current_page = st.session_state.page
+
 
 if current_page not in page_keys:
 
     current_page = "home"
+
 
 selected_page = st.radio(
     "Navigation",
@@ -2400,6 +2944,7 @@ selected_page = st.radio(
         current_page
     )
 )
+
 
 st.session_state.page = selected_page
 
@@ -2415,11 +2960,24 @@ if selected_page == "home":
         <div style="
             padding:25px;
             border-radius:20px;
-            background:linear-gradient(135deg,#667eea,#764ba2);
+            background:linear-gradient(
+                135deg,
+                #667eea,
+                #764ba2
+            );
             color:white;
         ">
-            <h1>🧠 {text("welcome", language)}, {name}!</h1>
-            <p>Your personalised MINDSETU NER dashboard</p>
+
+            <h1>
+                🧠 {text("welcome", language)},
+                {name}!
+            </h1>
+
+            <p>
+                Your personalised
+                MINDSETU NER dashboard
+            </p>
+
         </div>
         """,
         unsafe_allow_html=True
@@ -2427,27 +2985,12 @@ if selected_page == "home":
 
     st.write("")
 
-    c1, c2, c3, c4 = st.columns(4)
-
     total_sessions = conn.execute(
         """
         SELECT COUNT(*)
         FROM sessions
         WHERE user_id=?
         """,
-        (
-            user_id,
-        )
-    ).fetchone()[0]
-
-    completed_reminders = conn.execute(
-        """
-        SELECT COUNT(*)
-        FROM reminders
-        WHERE user_id=?
-        AND status='Done'
-        """
-        ,
         (
             user_id,
         )
@@ -2463,6 +3006,8 @@ if selected_page == "home":
             user_id,
         )
     ).fetchone()[0]
+
+    c1, c2, c3, c4 = st.columns(4)
 
     c1.metric(
         "Personal Baseline",
@@ -2516,8 +3061,9 @@ if selected_page == "home":
         )
 
     st.info(
-        "Your games automatically adapt their difficulty "
-        "based on your recent performance."
+        "Your game difficulty adapts after every "
+        "completed game. Strong performance increases "
+        "the difficulty; weaker performance decreases it."
     )
 
 
@@ -2536,7 +3082,8 @@ elif selected_page == "games":
     )
 
     st.write(
-        f"Adaptive difficulty level: **{difficulty} / 3**"
+        f"Adaptive difficulty level: "
+        f"**{difficulty} / 3**"
     )
 
     game_tab1, game_tab2, game_tab3 = st.tabs(
@@ -2547,9 +3094,8 @@ elif selected_page == "games":
         ]
     )
 
-
     # ========================================================
-    # MEMORY SEQUENCE GAME
+    # MEMORY SEQUENCE
     # ========================================================
 
     with game_tab1:
@@ -2559,9 +3105,13 @@ elif selected_page == "games":
         )
 
         sequence_length = {
+
             1: 4,
+
             2: 6,
+
             3: 8
+
         }[difficulty]
 
         if st.session_state.memory_sequence is None:
@@ -2581,6 +3131,14 @@ elif selected_page == "games":
                         range(1, 10),
                         sequence_length
                     )
+                )
+
+                queue_voice(
+                    (
+                        f"Memory game started. "
+                        f"Remember {sequence_length} numbers."
+                    ),
+                    language
                 )
 
                 st.rerun()
@@ -2616,15 +3174,27 @@ elif selected_page == "games":
                 try:
 
                     user_answer = [
+
                         int(x)
+
                         for x in re.split(
                             r"[,\s]+",
                             answer.strip()
                         )
+
                         if x
+
                     ]
 
                     if len(user_answer) != len(sequence):
+
+                        queue_voice(
+                            (
+                                f"Please enter exactly "
+                                f"{len(sequence)} numbers."
+                            ),
+                            language
+                        )
 
                         st.error(
                             f"Enter exactly "
@@ -2679,12 +3249,22 @@ elif selected_page == "games":
 
                         conn.commit()
 
+                        old_difficulty, new_difficulty, result = (
+                            update_adaptive_difficulty(
+                                user_id,
+                                score
+                            )
+                        )
+
                         st.session_state.memory_sequence = None
 
-                        announce(
-                            (
-                                f"Memory game completed. "
-                                f"Your score is {score}."
+                        queue_voice(
+                            game_result_voice(
+                                "Memory Game",
+                                score,
+                                old_difficulty,
+                                new_difficulty,
+                                language
                             ),
                             language
                         )
@@ -2693,13 +3273,17 @@ elif selected_page == "games":
 
                 except ValueError:
 
+                    queue_voice(
+                        "Please enter numbers only.",
+                        language
+                    )
+
                     st.error(
                         "Please enter numbers only."
                     )
 
-
     # ========================================================
-    # PATTERN MEMORY GAME
+    # PATTERN MEMORY
     # ========================================================
 
     with game_tab2:
@@ -2709,19 +3293,32 @@ elif selected_page == "games":
         )
 
         pattern_length = {
+
             1: 4,
+
             2: 6,
+
             3: 8
+
         }[difficulty]
 
         symbols = [
+
             "▲",
+
             "●",
+
             "■",
+
             "◆"
+
         ]
 
         if st.session_state.pattern_sequence is None:
+
+            st.write(
+                f"Remember {pattern_length} symbols."
+            )
 
             if st.button(
                 "▶️ Start Pattern Game",
@@ -2730,9 +3327,22 @@ elif selected_page == "games":
             ):
 
                 st.session_state.pattern_sequence = [
+
                     random.choice(symbols)
-                    for _ in range(pattern_length)
+
+                    for _ in range(
+                        pattern_length
+                    )
+
                 ]
+
+                queue_voice(
+                    (
+                        f"Pattern game started. "
+                        f"Remember {pattern_length} symbols."
+                    ),
+                    language
+                )
 
                 st.rerun()
 
@@ -2769,6 +3379,14 @@ elif selected_page == "games":
                 )
 
                 if len(answer_symbols) != len(pattern):
+
+                    queue_voice(
+                        (
+                            f"Please enter exactly "
+                            f"{len(pattern)} symbols."
+                        ),
+                        language
+                    )
 
                     st.error(
                         f"Enter exactly "
@@ -2823,18 +3441,27 @@ elif selected_page == "games":
 
                     conn.commit()
 
+                    old_difficulty, new_difficulty, result = (
+                        update_adaptive_difficulty(
+                            user_id,
+                            score
+                        )
+                    )
+
                     st.session_state.pattern_sequence = None
 
-                    announce(
-                        (
-                            f"Pattern game completed. "
-                            f"Your score is {score}."
+                    queue_voice(
+                        game_result_voice(
+                            "Pattern Memory Game",
+                            score,
+                            old_difficulty,
+                            new_difficulty,
+                            language
                         ),
                         language
                     )
 
                     st.rerun()
-
 
     # ========================================================
     # ATTENTION GAME
@@ -2863,6 +3490,12 @@ elif selected_page == "games":
                         1,
                         9
                     )
+                )
+
+                queue_voice(
+                    "Attention game started. "
+                    "Find the target number.",
+                    language
                 )
 
                 st.rerun()
@@ -2900,19 +3533,9 @@ elif selected_page == "games":
 
                             score = 100
 
-                            message = (
-                                "Excellent! "
-                                "You selected the correct target."
-                            )
-
                         else:
 
                             score = 0
-
-                            message = (
-                                "The selected number "
-                                "was incorrect."
-                            )
 
                         conn.execute(
                             """
@@ -2944,12 +3567,22 @@ elif selected_page == "games":
 
                         conn.commit()
 
+                        old_difficulty, new_difficulty, result = (
+                            update_adaptive_difficulty(
+                                user_id,
+                                score
+                            )
+                        )
+
                         st.session_state.reaction_target = None
 
-                        announce(
-                            (
-                                f"{message} "
-                                f"Your score is {score}."
+                        queue_voice(
+                            game_result_voice(
+                                "Attention Game",
+                                score,
+                                old_difficulty,
+                                new_difficulty,
+                                language
                             ),
                             language
                         )
@@ -2994,6 +3627,11 @@ elif selected_page == "reminders":
 
         if not reminder_title.strip():
 
+            queue_voice(
+                "Please enter a reminder.",
+                language
+            )
+
             st.error(
                 "Please enter a reminder."
             )
@@ -3033,17 +3671,16 @@ elif selected_page == "reminders":
 
             conn.commit()
 
-            announce(
+            queue_voice(
                 (
                     f"{reminder_title.strip()} "
-                    f"reminder added successfully "
+                    f"reminder has been added "
                     f"for {formatted_time}."
                 ),
                 language
             )
 
             st.rerun()
-
 
     st.divider()
 
@@ -3113,10 +3750,11 @@ elif selected_page == "reminders":
 
                     conn.commit()
 
-                    announce(
+                    queue_voice(
                         (
-                            f"{reminder[1]} "
-                            "completed successfully."
+                            f"Congratulations! "
+                            f"You completed your reminder: "
+                            f"{reminder[1]}."
                         ),
                         language
                     )
@@ -3142,7 +3780,7 @@ elif selected_page == "reminders":
 
                 conn.commit()
 
-                announce(
+                queue_voice(
                     "Reminder deleted successfully.",
                     language
                 )
@@ -3151,7 +3789,7 @@ elif selected_page == "reminders":
 
 
 # ============================================================
-# PATIENT HISTORY
+# HISTORY
 # ============================================================
 
 elif selected_page == "history":
@@ -3191,9 +3829,26 @@ elif selected_page == "history":
 
     else:
 
-        st.metric(
+        c1, c2, c3 = st.columns(3)
+
+        scores = [
+            float(row[1])
+            for row in sessions
+        ]
+
+        c1.metric(
             "Personal Baseline",
             f"{baseline:.1f}"
+        )
+
+        c2.metric(
+            "Average",
+            f"{sum(scores) / len(scores):.1f}"
+        )
+
+        c3.metric(
+            "Current Difficulty",
+            difficulty
         )
 
         st.dataframe(
@@ -3210,33 +3865,9 @@ elif selected_page == "history":
             hide_index=True
         )
 
-        scores = [
-            float(row[1])
-            for row in sessions
-        ]
-
-        if scores:
-
-            c1, c2, c3 = st.columns(3)
-
-            c1.metric(
-                "Average",
-                f"{sum(scores) / len(scores):.1f}"
-            )
-
-            c2.metric(
-                "Best",
-                f"{max(scores):.1f}"
-            )
-
-            c3.metric(
-                "Total Sessions",
-                len(scores)
-            )
-
 
 # ============================================================
-# PATIENT DETAILS
+# DETAILS
 # ============================================================
 
 elif selected_page == "details":
@@ -3258,7 +3889,7 @@ elif selected_page == "details":
     )
 
     st.write(
-        f"**Role:** Patient"
+        "**Role:** Patient"
     )
 
     st.write(
@@ -3270,7 +3901,8 @@ elif selected_page == "details":
     )
 
     st.write(
-        f"**Adaptive Difficulty:** {difficulty}/3"
+        f"**Adaptive Difficulty:** "
+        f"{difficulty}/3"
     )
 
     if doctor_id:
@@ -3307,7 +3939,7 @@ elif selected_page == "details":
 
 
 # ============================================================
-# PATIENT REPORTS
+# REPORTS
 # ============================================================
 
 elif selected_page == "reports":
@@ -3371,14 +4003,16 @@ elif selected_page == "reports":
                     key=f"listen_report_{report[0]}"
                 ):
 
-                    speak(
+                    # Voice only.
+                    # NO st.audio()
+                    # NO success message.
+
+                    queue_voice(
                         report[2],
                         language
                     )
 
-                    st.success(
-                        "Report audio generated."
-                    )
+                    st.rerun()
 
 
 # ============================================================
