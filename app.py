@@ -403,7 +403,7 @@ def build_patient_progress_pdf(patient_id):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]))
     story.append(profile_table)
-    story.append(5 * mm * 1)
+    story.append(Spacer(1, 5 * mm))
 
     # Section 2 - Metrics.
     story.append(section_title(2, "LONGITUDINAL COGNITIVE METRICS & PERFORMANCE INDICES"))
@@ -432,7 +432,7 @@ def build_patient_progress_pdf(patient_id):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
     ]))
     story.append(metric_table)
-    story.append(3 * mm)
+    story.append(Spacer(1, 3 * mm))
 
     assessment_rows = [[
         Paragraph("<b>Cognitive Assessment</b>", styles["BodySmall"]),
@@ -482,7 +482,7 @@ def build_patient_progress_pdf(patient_id):
     story.append(assessment_table)
 
     # Section 3 - reminders/care schedule. We use reminders rather than claiming medications.
-    story.append(5 * mm * 1)
+    story.append(Spacer(1, 5 * mm))
     story.append(section_title(3, "REMINDER & CARE SCHEDULE"))
     reminder_rows = [[
         Paragraph("<b>Time</b>", styles["BodySmall"]),
@@ -558,7 +558,7 @@ def build_patient_progress_pdf(patient_id):
     ]))
     story.append(audit_table)
 
-    story.append(5 * mm)
+    story.append(Spacer(1, 5 * mm))
     story.append(section_title(5, "PERFORMANCE SUMMARY & APP GUIDANCE"))
 
     if total_sessions:
@@ -587,7 +587,7 @@ def build_patient_progress_pdf(patient_id):
     ]))
     story.append(guidance_table)
 
-    story.append(7 * mm)
+    story.append(Spacer(1, 7 * mm))
     footer_table = Table([
         [
             Paragraph("MINDSETU NER", styles["BodySmall"]),
