@@ -3,3 +3,4 @@ pandas>=2.0
 streamlit-mic-recorder
 SpeechRecognition
 gTTS
+reportlab
