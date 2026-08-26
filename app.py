@@ -198,6 +198,34 @@ def build_patient_progress_pdf(patient_id):
         if doctor:
             doctor_name = f"Dr. {doctor[0]}"
 
+    # Latest doctor observation/report for this patient.
+    doctor_observation = None
+    latest_doctor_report = conn.execute(
+        """
+        SELECT
+            r.title,
+            r.report_text,
+            r.created_at,
+            d.name
+        FROM reports r
+        INNER JOIN users d
+        ON r.doctor_id=d.id
+        WHERE r.patient_id=?
+        AND d.role='doctor'
+        ORDER BY r.id DESC
+        LIMIT 1
+        """,
+        (patient_id,)
+    ).fetchone()
+
+    if latest_doctor_report:
+        doctor_observation = {
+            "title": safe_pdf_text(latest_doctor_report[0]),
+            "text": safe_pdf_text(latest_doctor_report[1]),
+            "date": safe_pdf_text(latest_doctor_report[2]),
+            "doctor": f"Dr. {safe_pdf_text(latest_doctor_report[3])}",
+        }
+
     total_sessions = len(sessions)
     scores = [float(row[1]) for row in sessions]
     mean_accuracy = round(sum(scores) / len(scores), 1) if scores else 0.0
@@ -558,8 +586,72 @@ def build_patient_progress_pdf(patient_id):
     ]))
     story.append(audit_table)
 
+    # Section 5 - Doctor observation.
     story.append(Spacer(1, 5 * mm))
-    story.append(section_title(5, "PERFORMANCE SUMMARY & APP GUIDANCE"))
+    story.append(section_title(5, "DOCTOR OBSERVATION"))
+
+    if doctor_observation:
+        observation_header = Table([
+            [
+                Paragraph("<b>Doctor</b>", styles["BodySmall"]),
+                Paragraph(safe_pdf_text(doctor_observation["doctor"]), styles["BodySmall"]),
+                Paragraph("<b>Date</b>", styles["BodySmall"]),
+                Paragraph(safe_pdf_text(doctor_observation["date"]), styles["BodySmall"]),
+            ],
+            [
+                Paragraph("<b>Report Title</b>", styles["BodySmall"]),
+                Paragraph(safe_pdf_text(doctor_observation["title"]), styles["BodySmall"]),
+                Paragraph("<b>Status</b>", styles["BodySmall"]),
+                Paragraph("Sent", styles["BodySmall"]),
+            ],
+        ], colWidths=[28 * mm, 70 * mm, 25 * mm, 52 * mm])
+        observation_header.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F5F8FA")),
+            ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#F5F8FA")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        story.append(observation_header)
+        story.append(Spacer(1, 3 * mm))
+
+        observation_box = Table([
+            [Paragraph(
+                safe_pdf_text(doctor_observation["text"]).replace("\n", "<br/>") ,
+                styles["BodySmall"]
+            )]
+        ], colWidths=[175 * mm])
+        observation_box.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7FAFC")),
+            ("BOX", (0, 0), (-1, -1), 0.6, REPORT_BORDER),
+            ("LEFTPADDING", (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ]))
+        story.append(observation_box)
+    else:
+        no_observation = Table([
+            [Paragraph(
+                "No doctor observation/report has been added for this patient yet.",
+                styles["BodySmall"]
+            )]
+        ], colWidths=[175 * mm])
+        no_observation.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7FAFC")),
+            ("BOX", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
+            ("LEFTPADDING", (0, 0), (-1, -1), 7),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+            ("TOPPADDING", (0, 0), (-1, -1), 7),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+        ]))
+        story.append(no_observation)
+
+    story.append(Spacer(1, 5 * mm))
+    story.append(section_title(6, "PERFORMANCE SUMMARY & APP GUIDANCE"))
 
     if total_sessions:
         guidance = (
