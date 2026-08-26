@@ -126,6 +126,97 @@ def safe_pdf_text(value):
     return str(value).replace("–", "-").replace("—", "-")
 
 
+def generate_automatic_doctor_observation(
+    patient_name,
+    sessions,
+    current_difficulty,
+    baseline,
+    doctor_name=None,
+):
+    """
+    Generate a neutral, data-driven observation automatically from the
+    patient's recorded app performance. This is NOT a medical diagnosis
+    and is not presented as a real doctor's authored note.
+    """
+    scores = [float(row[1]) for row in sessions]
+    total = len(scores)
+    average = sum(scores) / total if total else 0.0
+    best = max(scores) if scores else 0.0
+    lowest = min(scores) if scores else 0.0
+
+    if total == 0:
+        return (
+            f"Patient {patient_name} has no recorded cognitive game sessions yet. "
+            "There is insufficient performance data to generate an observation. "
+            "Begin regular cognitive sessions to establish a longitudinal baseline."
+        )
+
+    strong = sum(1 for s in scores if s >= 70)
+    weak = sum(1 for s in scores if s < 70)
+
+    # Trend from first half to second half of sessions.
+    midpoint = max(1, total // 2)
+    early_avg = sum(scores[:midpoint]) / len(scores[:midpoint])
+    late_avg = sum(scores[midpoint:]) / len(scores[midpoint:]) if total > midpoint else early_avg
+    trend_change = late_avg - early_avg
+
+    parts = []
+    parts.append(
+        f"Automated performance observation for {patient_name}: "
+        f"{total} cognitive session(s) recorded with an average score of "
+        f"{average:.1f}/100 and a best score of {best:.0f}/100."
+    )
+
+    if average >= 80:
+        parts.append(
+            "Overall performance is strong across the recorded sessions. "
+            "The patient is demonstrating consistent task completion at the current level."
+        )
+    elif average >= 60:
+        parts.append(
+            "Overall performance is moderate. The patient is completing tasks with "
+            "variable performance and may benefit from continued structured practice."
+        )
+    else:
+        parts.append(
+            "Overall performance is below the application's strong-performance threshold. "
+            "Continued guided practice may help establish a more stable performance pattern."
+        )
+
+    if trend_change >= 10:
+        parts.append(
+            f"Recent session performance is improving by approximately {trend_change:.1f} points "
+            "compared with the earlier recorded sessions."
+        )
+    elif trend_change <= -10:
+        parts.append(
+            f"Recent session performance is lower by approximately {abs(trend_change):.1f} points "
+            "compared with the earlier recorded sessions."
+        )
+    else:
+        parts.append(
+            "Recent performance is relatively stable compared with the earlier recorded sessions."
+        )
+
+    parts.append(
+        f"Strong-performance sessions: {strong}; lower-performance sessions: {weak}. "
+        f"Current adaptive difficulty: level {int(current_difficulty or 1)}."
+    )
+
+    if baseline and float(baseline) > 0:
+        parts.append(
+            f"Recorded personal baseline: {float(baseline):.1f}/100."
+        )
+
+    parts.append(
+        "This observation is generated automatically from application records and "
+        "should not be treated as a medical diagnosis or a substitute for evaluation "
+        "by a qualified clinician."
+    )
+
+    return " ".join(parts)
+
+
 def build_patient_progress_pdf(patient_id):
     """
     Build a clinical-report-inspired PDF using only data available in the app.
@@ -198,8 +289,7 @@ def build_patient_progress_pdf(patient_id):
         if doctor:
             doctor_name = f"Dr. {doctor[0]}"
 
-    # Latest doctor observation/report for this patient.
-    doctor_observation = None
+    # Get the latest actual doctor report, when one exists.
     latest_doctor_report = conn.execute(
         """
         SELECT
@@ -218,19 +308,46 @@ def build_patient_progress_pdf(patient_id):
         (patient_id,)
     ).fetchone()
 
-    if latest_doctor_report:
-        doctor_observation = {
-            "title": safe_pdf_text(latest_doctor_report[0]),
-            "text": safe_pdf_text(latest_doctor_report[1]),
-            "date": safe_pdf_text(latest_doctor_report[2]),
-            "doctor": f"Dr. {safe_pdf_text(latest_doctor_report[3])}",
-        }
-
     total_sessions = len(sessions)
     scores = [float(row[1]) for row in sessions]
     mean_accuracy = round(sum(scores) / len(scores), 1) if scores else 0.0
     best_score = max(scores) if scores else 0.0
     mean_latency = "Not available"
+
+    # Automatically generate a data-driven observation for every report.
+    auto_observation = generate_automatic_doctor_observation(
+        patient_name=patient[1],
+        sessions=sessions,
+        current_difficulty=patient[7] or 1,
+        baseline=patient[4] or 0,
+        doctor_name=(
+            f"Dr. {latest_doctor_report[3]}"
+            if latest_doctor_report else doctor_name
+        ),
+    )
+
+    # If a real doctor report exists, retain it as an additional note rather
+    # than requiring manual entry for the automatic observation.
+    doctor_observation = {
+        "title": "Automatically Generated Performance Observation",
+        "text": auto_observation,
+        "date": datetime.now().strftime("%d %b %Y %H:%M"),
+        "doctor": (
+            f"Dr. {latest_doctor_report[3]}"
+            if latest_doctor_report
+            else "System-generated"
+        ),
+        "is_automatic": True,
+        "source_report": (
+            {
+                "title": safe_pdf_text(latest_doctor_report[0]),
+                "text": safe_pdf_text(latest_doctor_report[1]),
+                "date": safe_pdf_text(latest_doctor_report[2]),
+                "doctor": f"Dr. {safe_pdf_text(latest_doctor_report[3])}",
+            }
+            if latest_doctor_report else None
+        ),
+    }
 
     # Group sessions into a compact cognitive-assessment table.
     grouped = {}
@@ -586,69 +703,73 @@ def build_patient_progress_pdf(patient_id):
     ]))
     story.append(audit_table)
 
-    # Section 5 - Doctor observation.
+    # Section 5 - automatically generated observation.
     story.append(Spacer(1, 5 * mm))
     story.append(section_title(5, "DOCTOR OBSERVATION"))
 
-    if doctor_observation:
-        observation_header = Table([
-            [
-                Paragraph("<b>Doctor</b>", styles["BodySmall"]),
-                Paragraph(safe_pdf_text(doctor_observation["doctor"]), styles["BodySmall"]),
-                Paragraph("<b>Date</b>", styles["BodySmall"]),
-                Paragraph(safe_pdf_text(doctor_observation["date"]), styles["BodySmall"]),
-            ],
-            [
-                Paragraph("<b>Report Title</b>", styles["BodySmall"]),
-                Paragraph(safe_pdf_text(doctor_observation["title"]), styles["BodySmall"]),
-                Paragraph("<b>Status</b>", styles["BodySmall"]),
-                Paragraph("Sent", styles["BodySmall"]),
-            ],
-        ], colWidths=[28 * mm, 70 * mm, 25 * mm, 52 * mm])
-        observation_header.setStyle(TableStyle([
-            ("GRID", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
-            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F5F8FA")),
-            ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#F5F8FA")),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 5),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ]))
-        story.append(observation_header)
-        story.append(Spacer(1, 3 * mm))
+    observation_header = Table([
+        [
+            Paragraph("<b>Source</b>", styles["BodySmall"]),
+            Paragraph("Automatically generated from recorded app performance", styles["BodySmall"]),
+            Paragraph("Date", styles["BodySmall"]),
+            Paragraph(safe_pdf_text(doctor_observation["date"]), styles["BodySmall"]),
+        ],
+        [
+            Paragraph("<b>Status</b>", styles["BodySmall"]),
+            Paragraph("Auto-generated", styles["BodySmall"]),
+            Paragraph("Doctor", styles["BodySmall"]),
+            Paragraph(safe_pdf_text(doctor_observation["doctor"]), styles["BodySmall"]),
+        ],
+    ], colWidths=[28 * mm, 70 * mm, 25 * mm, 52 * mm])
+    observation_header.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F5F8FA")),
+        ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#F5F8FA")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(observation_header)
+    story.append(Spacer(1, 3 * mm))
 
-        observation_box = Table([
-            [Paragraph(
-                safe_pdf_text(doctor_observation["text"]).replace("\n", "<br/>") ,
-                styles["BodySmall"]
-            )]
-        ], colWidths=[175 * mm])
-        observation_box.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7FAFC")),
-            ("BOX", (0, 0), (-1, -1), 0.6, REPORT_BORDER),
-            ("LEFTPADDING", (0, 0), (-1, -1), 7),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
-            ("TOPPADDING", (0, 0), (-1, -1), 7),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-        ]))
-        story.append(observation_box)
-    else:
-        no_observation = Table([
-            [Paragraph(
-                "No doctor observation/report has been added for this patient yet.",
-                styles["BodySmall"]
-            )]
-        ], colWidths=[175 * mm])
-        no_observation.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7FAFC")),
+    observation_box = Table([
+        [Paragraph(
+            safe_pdf_text(doctor_observation["text"]).replace("\n", "<br/>") ,
+            styles["BodySmall"]
+        )]
+    ], colWidths=[175 * mm])
+    observation_box.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F7FAFC")),
+        ("BOX", (0, 0), (-1, -1), 0.6, REPORT_BORDER),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    story.append(observation_box)
+
+    # Show the real doctor's latest report automatically when it exists.
+    if latest_doctor_report:
+        story.append(Spacer(1, 4 * mm))
+        story.append(Paragraph(
+            "<b>Latest Doctor-Submitted Note</b>",
+            styles["BodySmall"]
+        ))
+        submitted_note = Table([[Paragraph(
+            safe_pdf_text(latest_doctor_report[1]).replace("\n", "<br/>") ,
+            styles["BodySmall"]
+        )]], colWidths=[175 * mm])
+        submitted_note.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFF9E8")),
             ("BOX", (0, 0), (-1, -1), 0.5, REPORT_BORDER),
             ("LEFTPADDING", (0, 0), (-1, -1), 7),
             ("RIGHTPADDING", (0, 0), (-1, -1), 7),
             ("TOPPADDING", (0, 0), (-1, -1), 7),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
         ]))
-        story.append(no_observation)
+        story.append(submitted_note)
 
     story.append(Spacer(1, 5 * mm))
     story.append(section_title(6, "PERFORMANCE SUMMARY & APP GUIDANCE"))
