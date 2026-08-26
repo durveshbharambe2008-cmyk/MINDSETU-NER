@@ -2973,11 +2973,7 @@ if selected_page == "home":
                 🧠 {text("welcome", language)}, {name}!
             </h1>
 
-            <p>
-                Your personalised
-                MINDSETU NER dashboard
-            </p>
-        </div>
+         </div>
         """
     )
 
