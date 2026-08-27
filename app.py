@@ -42,7 +42,7 @@
 # 36. Provider-owned patient privacy
 # 37. Admin management / verification instead of central patient assignment
 # 38. 10-second Memory Sequence viewing period
-# 39. Memory sequence is removed before answer entry is created
+# 39. Memory sequence hides automatically before answer entry
 # 40. Congratulations message after strong game completion
 # 41. Visible adaptive difficulty increase notification
 #
@@ -1802,18 +1802,15 @@ DEFAULT_SESSION_VALUES = {
 
     "memory_sequence": None,
 
-    # Memory game has two strictly separate phases:
-    # memorize -> 10-second display, then answer -> input enabled.
-    "memory_phase": "idle",
-    "memory_start_time": None,
-    "memory_answer_enabled": False,
-
     "pattern_sequence": None,
 
     "reaction_target": None,
 
     "memory_round": 0,
     "memory_total_score": 0.0,
+    # Timestamp used by the 10-second browser countdown.
+    # The answer input is not rendered until this period has elapsed.
+    "memory_display_started_at": None,
     "pattern_round": 0,
     "pattern_total_score": 0.0,
     "attention_round": 0,
@@ -4332,18 +4329,10 @@ GAME_ROUNDS_BY_DIFFICULTY = {
 
 
 def reset_memory_game():
-
     st.session_state.memory_sequence = None
-
     st.session_state.memory_round = 0
-
     st.session_state.memory_total_score = 0.0
-
-    st.session_state.memory_phase = "idle"
-
-    st.session_state.memory_start_time = None
-
-    st.session_state.memory_answer_enabled = False
+    st.session_state.memory_display_started_at = None
 
 
 def reset_pattern_game():
@@ -4609,47 +4598,11 @@ elif selected_page == "games":
             3: 8
         }[difficulty]
 
-        # ----------------------------------------------------
-        # MEMORY GAME STATE
-        # ----------------------------------------------------
-        #
-        # idle       -> Start button
-        # memorize   -> numbers visible for exactly 10 seconds
-        # answer     -> numbers removed, answer input enabled
-        #
-        # IMPORTANT:
-        # We do NOT create the answer text input during the
-        # 10-second memorize phase. A blocking 10-second wait
-        # is used after rendering the sequence so the frontend
-        # receives the numbers first. The display placeholder is
-        # then removed before the answer widget is created.
-        # ----------------------------------------------------
-
-        if "memory_phase" not in st.session_state:
-            st.session_state.memory_phase = "idle"
-
-        if "memory_start_time" not in st.session_state:
-            st.session_state.memory_start_time = None
-
-        if "memory_answer_enabled" not in st.session_state:
-            st.session_state.memory_answer_enabled = False
-
-        # ----------------------------------------------------
-        # START SCREEN
-        # ----------------------------------------------------
-
-        if st.session_state.memory_phase == "idle":
+        if st.session_state.memory_round == 0:
 
             st.write(
                 f"You will play {total_rounds} rounds. "
                 f"Remember {sequence_length} numbers in each round."
-            )
-
-            st.info(
-                "🧠 First, the numbers will be shown clearly for "
-                "10 seconds. During this time the answer box is "
-                "locked and hidden. After 10 seconds, the numbers "
-                "will disappear and the answer box will become active."
             )
 
             if st.button(
@@ -4659,263 +4612,187 @@ elif selected_page == "games":
             ):
 
                 st.session_state.memory_round = 1
-
                 st.session_state.memory_total_score = 0.0
-
                 st.session_state.memory_sequence = random.sample(
                     range(1, 10),
                     sequence_length
                 )
 
-                st.session_state.memory_phase = "memorize"
-
-                st.session_state.memory_start_time = (
-                    datetime.now().timestamp()
-                )
-
-                st.session_state.memory_answer_enabled = False
+                # Start the 10-second memory viewing period.
+                # We use a server-side timestamp so that the answer field
+                # is only rendered after the full viewing period.
+                st.session_state.memory_display_started_at = datetime.now().timestamp()
 
                 queue_voice(
-                    (
-                        f"Memory game started. Round 1 of {total_rounds}. "
-                        f"Remember {sequence_length} numbers. "
-                        "You have 10 seconds."
-                    ),
+                    f"Memory game started. Round 1 of {total_rounds}. "
+                    f"You have 10 seconds to remember {sequence_length} numbers. "
+                    "The numbers will then disappear. Enter the sequence from memory.",
                     language
                 )
 
                 st.rerun()
 
-        # ----------------------------------------------------
-        # 10-SECOND MEMORIZATION PHASE
-        # ----------------------------------------------------
-
-        elif st.session_state.memory_phase == "memorize":
+        else:
 
             current_round = st.session_state.memory_round
             sequence = st.session_state.memory_sequence
 
             st.progress(
                 current_round / total_rounds,
-                text=(
-                    f"Round {current_round} "
-                    f"of {total_rounds}"
+                text=f"Round {current_round} of {total_rounds}"
+            )
+
+            # --------------------------------------------------------
+            # 10-SECOND MEMORY DISPLAY + COUNTDOWN
+            # --------------------------------------------------------
+            # IMPORTANT: The answer input is NOT rendered while the 10-second
+            # display period is active. This prevents the patient from typing
+            # before the numbers disappear. The browser countdown updates
+            # every second and reloads the Streamlit page at 0 seconds.
+
+            if st.session_state.get("memory_display_started_at") is None:
+                # Safety fallback for an older session or interrupted round.
+                st.session_state.memory_display_started_at = datetime.now().timestamp()
+
+            elapsed_seconds = (
+                datetime.now().timestamp()
+                - float(st.session_state.memory_display_started_at)
+            )
+
+            MEMORY_VIEW_SECONDS = 10
+
+            if elapsed_seconds < MEMORY_VIEW_SECONDS:
+
+                sequence_text = "   •   ".join(
+                    str(number)
+                    for number in sequence
                 )
-            )
 
-            sequence_text = "  •  ".join(
-                str(number)
-                for number in sequence
-            )
+                remaining_seconds = max(
+                    1,
+                    MEMORY_VIEW_SECONDS - int(elapsed_seconds)
+                )
 
-            # Use an empty placeholder so the sequence is
-            # removed BEFORE the answer input is created.
-            memory_display = st.empty()
+                memory_box_id = f"memory_display_{user_id}_{current_round}"
+                memory_count_id = f"memory_countdown_{user_id}_{current_round}"
+                memory_sequence_id = f"memory_sequence_{user_id}_{current_round}"
 
-            memory_display.html(
-                f"""
-                <div id="mindsetu_memory_box"
-                     style="
-                        padding:30px 24px;
+                st.html(
+                    f"""
+                    <div id="{memory_box_id}" style="
+                        padding:28px 24px;
                         border-radius:18px;
                         text-align:center;
-                        margin:12px 0 18px 0;
-                        border:3px solid #635BFF;
-                        background:linear-gradient(
-                            135deg,
-                            #EEF2FF,
-                            #E0E7FF
-                        );
-                        box-shadow:0 8px 24px rgba(0,0,0,0.12);
-                     ">
-
-                    <div style="
-                        font-size:18px;
-                        font-weight:700;
-                        color:#312E81;
-                        margin-bottom:18px;
+                        margin:14px 0 18px 0;
+                        border:2px solid #4F46E5;
+                        background:linear-gradient(135deg,#EEF2FF,#F5F3FF);
+                        box-shadow:0 6px 18px rgba(79,70,229,0.15);
                     ">
-                        🧠 Remember these numbers
-                    </div>
+                        <div style="
+                            font-size:18px;
+                            font-weight:700;
+                            color:#312E81;
+                            margin-bottom:14px;
+                        ">
+                            🧠 Remember these numbers
+                        </div>
 
-                    <div style="
-                        font-size:42px;
-                        font-weight:900;
-                        color:#111827;
-                        letter-spacing:10px;
-                        word-spacing:12px;
-                        margin:14px 0;
-                    ">
-                        {sequence_text}
-                    </div>
+                        <div id="{memory_sequence_id}" style="
+                            font-size:38px;
+                            line-height:1.35;
+                            font-weight:900;
+                            letter-spacing:5px;
+                            color:#111827;
+                            word-spacing:8px;
+                            margin:8px 0 16px 0;
+                        ">
+                            {sequence_text}
+                        </div>
 
-                    <div id="mindsetu_memory_timer"
-                         style="
-                            margin-top:16px;
-                            font-size:20px;
+                        <div id="{memory_count_id}" style="
+                            display:inline-block;
+                            padding:8px 18px;
+                            border-radius:999px;
+                            background:#312E81;
+                            color:white;
+                            font-size:18px;
                             font-weight:800;
-                            color:#B91C1C;
-                         ">
-                        ⏱️ 10 seconds remaining
+                        ">
+                            ⏱️ {remaining_seconds} seconds
+                        </div>
                     </div>
 
-                    <div style="
-                        margin-top:8px;
-                        font-size:14px;
-                        color:#374151;
-                    ">
-                        Do not enter anything yet.
-                        The answer box will appear after 10 seconds.
-                    </div>
-                </div>
-
-                <script>
+                    <script>
                     (function() {{
-                        const timer =
-                            document.getElementById(
-                                "mindsetu_memory_timer"
-                            );
+                        const countdown = document.getElementById("{memory_count_id}");
+                        const sequence = document.getElementById("{memory_sequence_id}");
+                        const box = document.getElementById("{memory_box_id}");
 
-                        let remaining = 10;
+                        if (!countdown || !sequence || !box) return;
 
-                        if (timer) {{
-                            timer.textContent =
-                                "⏱️ " +
-                                remaining +
-                                " seconds remaining";
+                        let seconds = {remaining_seconds};
 
-                            const interval =
-                                setInterval(function() {{
-                                    remaining -= 1;
+                        countdown.textContent = "⏱️ " + seconds + " seconds";
 
-                                    if (remaining > 0) {{
-                                        timer.textContent =
-                                            "⏱️ " +
-                                            remaining +
-                                            " seconds remaining";
-                                    }} else {{
-                                        clearInterval(interval);
+                        const timer = setInterval(function() {{
+                            seconds -= 1;
 
-                                        timer.textContent =
-                                            "✅ Time is up";
+                            if (seconds > 0) {{
+                                countdown.textContent = "⏱️ " + seconds + " seconds";
+                            }} else {{
+                                clearInterval(timer);
+
+                                // At 0, remove the numbers in the browser
+                                // without injecting HTML as innerHTML.
+                                sequence.textContent = "";
+                                sequence.style.display = "none";
+                                countdown.textContent = "✅ 0 seconds - numbers disappeared";
+                                countdown.style.background = "#047857";
+
+                                // Give the browser a moment to show 0, then
+                                // rerun Streamlit. Only after the rerun does
+                                // the Python text input get rendered.
+                                setTimeout(function() {{
+                                    try {{
+                                        window.parent.location.reload();
+                                    }} catch (e) {{
+                                        window.location.reload();
                                     }}
-                                }}, 1000);
-                        }}
+                                }}, 250);
+                            }}
+                        }}, 1000);
                     }})();
-                </script>
-                """,
-                width="stretch"
-            )
-
-            st.info(
-                "⏳ Memorization phase: the sequence is visible "
-                "for 10 seconds. The answer field is intentionally "
-                "not created during this phase."
-            )
-
-            # ------------------------------------------------
-            # Wait exactly 10 seconds AFTER the numbers are
-            # rendered. This keeps the answer widget from
-            # appearing simultaneously with the numbers.
-            # ------------------------------------------------
-            import time as _time
-            _time.sleep(10)
-
-            # ------------------------------------------------
-            # Remove the visible sequence BEFORE creating the
-            # answer field.
-            # ------------------------------------------------
-            memory_display.empty()
-
-            st.session_state.memory_phase = "answer"
-
-            st.session_state.memory_answer_enabled = True
-
-            st.session_state.memory_start_time = None
-
-            queue_voice(
-                (
-                    "Time is up. "
-                    "The numbers have disappeared. "
-                    "You can now enter the sequence."
-                ),
-                language
-            )
-
-            # ------------------------------------------------
-            # ANSWER PHASE IS RENDERED BELOW IN THE SAME RUN.
-            # ------------------------------------------------
-
-        # ----------------------------------------------------
-        # ANSWER PHASE
-        # ----------------------------------------------------
-
-        if (
-            st.session_state.memory_phase == "answer"
-            and st.session_state.memory_answer_enabled
-        ):
-
-            current_round = st.session_state.memory_round
-
-            sequence = st.session_state.memory_sequence
-
-            st.progress(
-                current_round / total_rounds,
-                text=(
-                    f"Round {current_round} "
-                    f"of {total_rounds}"
+                    </script>
+                    """,
+                    width="stretch"
                 )
-            )
 
-            # ------------------------------------------------
-            # Number sequence is intentionally NOT displayed.
-            # ------------------------------------------------
+                st.info(
+                    "⏱️ Memory mode: the sequence is visible for exactly 10 seconds. "
+                    "The answer field will appear only after the countdown reaches 0."
+                )
 
-            st.markdown(
-                """
-                <div style="
-                    padding:22px;
-                    border-radius:16px;
-                    text-align:center;
-                    margin:10px 0 18px 0;
-                    border:3px solid #22C55E;
-                    background:#052E16;
-                    box-shadow:0 8px 24px rgba(0,0,0,0.12);
-                ">
-                    <div style="
-                        font-size:22px;
-                        font-weight:800;
-                        color:#86EFAC;
-                    ">
-                        ✅ Time is up
-                    </div>
+            else:
 
-                    <div style="
-                        margin-top:8px;
-                        font-size:17px;
-                        color:#F0FDF4;
-                    ">
-                        The numbers have disappeared.
-                        Now enter them in the same order.
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+                # --------------------------------------------------------
+                # ANSWER MODE - shown only after the 10-second display
+                # period has finished.
+                # --------------------------------------------------------
+                st.success(
+                    "✅ Time is up — the numbers have disappeared. "
+                    "Now enter the sequence in the same order."
+                )
 
-            # ------------------------------------------------
-            # ANSWER INPUT IS CREATED ONLY AFTER THE
-            # 10-SECOND MEMORIZATION PHASE IS COMPLETE.
-            # ------------------------------------------------
+                st.caption(
+                    "The 10-second viewing period is complete. "
+                    "You can now enter your answer."
+                )
 
-            answer = st.text_input(
-                "Enter the numbers in the same order",
-                placeholder=(
-                    f"Enter {sequence_length} numbers "
-                    "separated by spaces or commas"
-                ),
-                key=f"memory_answer_{current_round}"
-            )
+                answer = st.text_input(
+                    "Enter the numbers in the same order",
+                    placeholder=f"Enter exactly {len(sequence)} numbers, e.g. 9 7 5 3 ...",
+                    key=f"memory_answer_{current_round}"
+                )
 
             exit_col, submit_col = st.columns(2)
 
@@ -4926,15 +4803,12 @@ elif selected_page == "games":
                     key=f"memory_exit_{current_round}",
                     use_container_width=True
                 ):
-
-                    exit_current_game(
-                        "Memory Sequence"
-                    )
+                    exit_current_game("Memory Sequence")
 
             with submit_col:
 
                 if st.button(
-                    "✅ Submit Round",
+                    "Submit Round",
                     key=f"memory_submit_{current_round}",
                     type="primary",
                     use_container_width=True
@@ -4954,8 +4828,7 @@ elif selected_page == "games":
                         if len(user_answer) != len(sequence):
 
                             st.error(
-                                f"Enter exactly "
-                                f"{len(sequence)} numbers."
+                                f"Enter exactly {len(sequence)} numbers."
                             )
 
                         else:
@@ -4973,13 +4846,7 @@ elif selected_page == "games":
                                 len(sequence)
                             ) * 100
 
-                            st.session_state.memory_total_score += (
-                                round_score
-                            )
-
-                            # ------------------------------------------------
-                            # FINAL ROUND
-                            # ------------------------------------------------
+                            st.session_state.memory_total_score += round_score
 
                             if current_round >= total_rounds:
 
@@ -4993,53 +4860,30 @@ elif selected_page == "games":
                                     final_score
                                 )
 
-                                (
-                                    old_difficulty,
-                                    new_difficulty,
-                                    result
-                                ) = update_adaptive_difficulty(
-                                    user_id,
-                                    final_score
-                                )
-
-                                # Save the result so the existing
-                                # Games-page result panel displays
-                                # the congratulations/difficulty message
-                                # after rerun.
-                                st.session_state.game_result_message = (
-                                    game_result_voice(
-                                        "Memory Game",
-                                        round(
-                                            final_score,
-                                            1
-                                        ),
-                                        old_difficulty,
-                                        new_difficulty,
-                                        language
+                                old_difficulty, new_difficulty, result = (
+                                    update_adaptive_difficulty(
+                                        user_id,
+                                        final_score
                                     )
                                 )
 
-                                st.session_state.game_result_score = (
-                                    round(final_score, 1)
+                                st.session_state.game_result_message = game_result_voice(
+                                    "Memory Game",
+                                    round(final_score, 1),
+                                    old_difficulty,
+                                    new_difficulty,
+                                    language
                                 )
-
-                                st.session_state.game_result_old_difficulty = (
-                                    old_difficulty
-                                )
-
-                                st.session_state.game_result_new_difficulty = (
-                                    new_difficulty
-                                )
+                                st.session_state.game_result_score = round(final_score, 1)
+                                st.session_state.game_result_old_difficulty = old_difficulty
+                                st.session_state.game_result_new_difficulty = new_difficulty
 
                                 reset_memory_game()
 
                                 queue_voice(
                                     game_result_voice(
                                         "Memory Game",
-                                        round(
-                                            final_score,
-                                            1
-                                        ),
+                                        round(final_score, 1),
                                         old_difficulty,
                                         new_difficulty,
                                         language
@@ -5049,48 +4893,15 @@ elif selected_page == "games":
 
                                 st.rerun()
 
-                            # ------------------------------------------------
-                            # NEXT ROUND
-                            # ------------------------------------------------
-
                             else:
 
-                                next_round = (
-                                    current_round + 1
+                                next_round = current_round + 1
+                                st.session_state.memory_round = next_round
+                                st.session_state.memory_sequence = random.sample(
+                                    range(1, 10),
+                                    sequence_length
                                 )
-
-                                st.session_state.memory_round = (
-                                    next_round
-                                )
-
-                                st.session_state.memory_sequence = (
-                                    random.sample(
-                                        range(1, 10),
-                                        sequence_length
-                                    )
-                                )
-
-                                st.session_state.memory_phase = (
-                                    "memorize"
-                                )
-
-                                st.session_state.memory_start_time = (
-                                    datetime.now().timestamp()
-                                )
-
-                                st.session_state.memory_answer_enabled = (
-                                    False
-                                )
-
-                                queue_voice(
-                                    (
-                                        f"Round {next_round} "
-                                        f"of {total_rounds}. "
-                                        f"Remember {sequence_length} "
-                                        "numbers for 10 seconds."
-                                    ),
-                                    language
-                                )
+                                st.session_state.memory_display_started_at = datetime.now().timestamp()
 
                                 st.rerun()
 
