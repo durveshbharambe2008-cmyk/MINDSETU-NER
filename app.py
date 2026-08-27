@@ -30,6 +30,7 @@
 # 24. Multilingual voice output
 # 25. Multilingual voice recognition
 # 26. Multilingual UI
+# 27. Round completion voice feedback
 # 27. Game Exit Option
 # 28. 15-20 Round Cognitive Games
 # 29. Last 5 Games Progress Graph
@@ -4083,6 +4084,15 @@ elif selected_page == "games":
 
                             else:
 
+                                queue_voice(
+                                    (
+                                        f"Congratulations! You completed round {current_round} "
+                                        f"of {total_rounds} with a score of {round(round_score, 1)}. "
+                                        f"Now moving to round {current_round + 1}."
+                                    ),
+                                    language
+                                )
+
                                 next_round = current_round + 1
                                 st.session_state.memory_round = next_round
                                 st.session_state.memory_sequence = random.sample(
@@ -4255,6 +4265,15 @@ elif selected_page == "games":
 
                         else:
 
+                            queue_voice(
+                                (
+                                    f"Congratulations! You completed round {current_round} "
+                                    f"of {total_rounds} with a score of {round(round_score, 1)}. "
+                                    f"Now moving to round {current_round + 1}."
+                                ),
+                                language
+                            )
+
                             next_round = current_round + 1
                             st.session_state.pattern_round = next_round
                             st.session_state.pattern_sequence = [
@@ -4378,6 +4397,15 @@ elif selected_page == "games":
                             st.rerun()
 
                         else:
+
+                            queue_voice(
+                                (
+                                    f"Congratulations! You completed round {current_round} "
+                                    f"of {total_rounds} with a score of {round(round_score, 1)}. "
+                                    f"Now moving to round {current_round + 1}."
+                                ),
+                                language
+                            )
 
                             st.session_state.attention_round = current_round + 1
                             st.session_state.reaction_target = random.randint(1, 9)
