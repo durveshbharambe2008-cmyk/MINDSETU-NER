@@ -4362,43 +4362,68 @@ def exit_current_game(game_name):
 
 def render_object_memory_game():
 
+    import time as time_module
+
+    # ============================================================
+    # OBJECT MEMORY GAME DATA
+    # ============================================================
+
     object_bank = [
-        ("🧺", "Bamboo Kula", "Winnowing Fan"),
-        ("🦏", "One-Horned Rhino", "Kaziranga Rhino"),
-        ("🦜", "Great Hornbill", "Hornbill Bird"),
-        ("🥟", "Til Pitha", "Rice Delicacy"),
-        ("🧣", "Gamusa", "Sacred Woven Towel"),
-        ("🎩", "Jaapi", "Conical Bamboo Hat"),
-        ("🥁", "Bihu Dhol", "Folk Drum"),
-        ("🪔", "Xorai", "Traditional Offering"),
-        ("🎋", "Bamboo Flute", "Traditional Instrument"),
-        ("🍚", "Traditional Pitha", "Rice Delicacy"),
+        (
+            "🧺",
+            "Bamboo Kula",
+            "Traditional Winnowing Fan"
+        ),
+        (
+            "🦏",
+            "One-Horned Rhino",
+            "Assamese Rhinoceros"
+        ),
+        (
+            "🦜",
+            "Great Hornbill",
+            "Traditional Hornbill Bird"
+        ),
+        (
+            "🥟",
+            "Til Pitha",
+            "Traditional Rice Delicacy"
+        ),
+        (
+            "🧣",
+            "Gamusa",
+            "Traditional Assamese Cloth"
+        ),
+        (
+            "🎩",
+            "Jaapi",
+            "Traditional Conical Hat"
+        ),
+        (
+            "🥁",
+            "Bihu Dhol",
+            "Traditional Assamese Drum"
+        ),
+        (
+            "🪔",
+            "Xorai",
+            "Traditional Offering Item"
+        ),
+        (
+            "🎋",
+            "Bamboo Flute",
+            "Traditional Instrument"
+        ),
+        (
+            "🍚",
+            "Traditional Pitha",
+            "Rice-Based Delicacy"
+        )
     ]
 
-    game_key = "object_memory"
-
-    # --------------------------------------------------------
-    # INITIALIZE SESSION STATE
-    # --------------------------------------------------------
-
-    if f"{game_key}_phase" not in st.session_state:
-        st.session_state[f"{game_key}_phase"] = "start"
-
-    if f"{game_key}_targets" not in st.session_state:
-        st.session_state[f"{game_key}_targets"] = []
-
-    if f"{game_key}_options" not in st.session_state:
-        st.session_state[f"{game_key}_options"] = []
-
-    if f"{game_key}_selected" not in st.session_state:
-        st.session_state[f"{game_key}_selected"] = []
-
-    if f"{game_key}_score" not in st.session_state:
-        st.session_state[f"{game_key}_score"] = 0
-
-    # --------------------------------------------------------
+    # ============================================================
     # DIFFICULTY SETTINGS
-    # --------------------------------------------------------
+    # ============================================================
 
     memory_count = {
         1: 4,
@@ -4418,123 +4443,155 @@ def render_object_memory_game():
         3: 6
     }.get(difficulty, 4)
 
-    phase = st.session_state[
-        f"{game_key}_phase"
-    ]
+    # ============================================================
+    # SESSION STATE INITIALIZATION
+    # ============================================================
 
-    # ========================================================
-    # GAME TITLE
-    # ========================================================
+    if "object_memory_phase" not in st.session_state:
+        st.session_state.object_memory_phase = "start"
 
-    st.subheader(
-        "🧠 Object Memory Recall"
-    )
+    if "object_memory_targets" not in st.session_state:
+        st.session_state.object_memory_targets = []
 
-    st.caption(
-        f"Difficulty {difficulty}/3 • "
-        f"Remember {memory_count} objects"
-    )
+    if "object_memory_options" not in st.session_state:
+        st.session_state.object_memory_options = []
 
-    # ========================================================
-    # START SCREEN
-    # ========================================================
+    if "object_memory_round" not in st.session_state:
+        st.session_state.object_memory_round = 0
 
-    if phase == "start":
+    if "object_memory_total_score" not in st.session_state:
+        st.session_state.object_memory_total_score = 0.0
+
+    # ============================================================
+    # HELPER FUNCTION
+    # ============================================================
+
+    def prepare_object_memory_round(round_number):
+
+        targets = random.sample(
+            object_bank,
+            memory_count
+        )
+
+        remaining_objects = [
+            item
+            for item in object_bank
+            if item not in targets
+        ]
+
+        distractor_count = option_count - memory_count
+
+        distractors = random.sample(
+            remaining_objects,
+            distractor_count
+        )
+
+        options = targets + distractors
+
+        random.shuffle(options)
+
+        st.session_state.object_memory_targets = targets
+        st.session_state.object_memory_options = options
+        st.session_state.object_memory_round = round_number
+        st.session_state.object_memory_phase = "memorize"
+
+    # ============================================================
+    # START PHASE
+    # ============================================================
+
+    if st.session_state.object_memory_phase == "start":
+
+        st.subheader(
+            "🧩 Object Memory Recall"
+        )
+
+        st.write(
+            "Remember the objects shown on the screen. "
+            "After they disappear, select the objects "
+            "you remember."
+        )
 
         st.info(
-            "You will see some familiar objects for a few seconds. "
-            "Look carefully and remember them. "
-            "After the timer ends, select the objects you saw."
+            f"You will play {total_rounds} rounds. "
+            f"At this difficulty, you must remember "
+            f"{memory_count} objects."
+        )
+
+        st.caption(
+            f"Difficulty: {difficulty}/3"
         )
 
         if st.button(
-            "▶️ Start Object Memory Game",
+            "▶️ Start Game",
             key="object_memory_start",
             type="primary",
             use_container_width=True
         ):
 
-            targets = random.sample(
-                object_bank,
-                memory_count
+            st.session_state.object_memory_total_score = 0.0
+
+            prepare_object_memory_round(1)
+
+            queue_voice(
+                (
+                    "Object Memory Recall started. "
+                    f"Round 1 of {total_rounds}. "
+                    f"Remember {memory_count} objects."
+                ),
+                language
             )
-
-            remaining = [
-                item
-                for item in object_bank
-                if item not in targets
-            ]
-
-            distractor_count = min(
-                option_count - memory_count,
-                len(remaining)
-            )
-
-            distractors = random.sample(
-                remaining,
-                distractor_count
-            )
-
-            options = targets + distractors
-
-            random.shuffle(options)
-
-            st.session_state[
-                f"{game_key}_targets"
-            ] = targets
-
-            st.session_state[
-                f"{game_key}_options"
-            ] = options
-
-            st.session_state[
-                f"{game_key}_selected"
-            ] = []
-
-            st.session_state[
-                f"{game_key}_phase"
-            ] = "memorize"
 
             st.rerun()
 
-    # ========================================================
-    # MEMORIZATION SCREEN
-    # ========================================================
+    # ============================================================
+    # MEMORIZATION PHASE
+    # ============================================================
 
-    elif phase == "memorize":
+    elif st.session_state.object_memory_phase == "memorize":
 
-        targets = st.session_state[
-            f"{game_key}_targets"
-        ]
-
-        st.markdown(
-            "### 👀 Look carefully and remember these objects"
+        current_round = (
+            st.session_state.object_memory_round
         )
 
-        st.caption(
-            "Try to remember both the object and its name."
+        targets = (
+            st.session_state.object_memory_targets
         )
 
-        columns = st.columns(
-            min(3, len(targets))
+        st.subheader(
+            "👀 Remember These Objects"
         )
+
+        st.progress(
+            current_round / total_rounds,
+            text=(
+                f"Round {current_round} "
+                f"of {total_rounds}"
+            )
+        )
+
+        st.write(
+            "Look carefully and remember all the objects."
+        )
+
+        # --------------------------------------------------------
+        # DISPLAY OBJECT CARDS
+        # --------------------------------------------------------
+
+        columns = st.columns(2)
 
         for index, item in enumerate(targets):
 
-            with columns[
-                index % len(columns)
-            ]:
+            with columns[index % 2]:
 
                 st.markdown(
                     f"""
                     <div style="
                         border: 2px solid #f0ad00;
                         border-radius: 16px;
-                        padding: 15px;
+                        padding: 18px;
                         text-align: center;
-                        margin-bottom: 12px;
+                        margin-bottom: 14px;
                         background: #fffaf0;
-                        min-height: 145px;
                     ">
 
                         <div style="
@@ -4545,7 +4602,7 @@ def render_object_memory_game():
                         </div>
 
                         <div style="
-                            font-size: 17px;
+                            font-size: 18px;
                             font-weight: 700;
                         ">
                             {item[1]}
@@ -4554,7 +4611,6 @@ def render_object_memory_game():
                         <div style="
                             font-size: 13px;
                             color: #666;
-                            margin-top: 5px;
                         ">
                             {item[2]}
                         </div>
@@ -4564,13 +4620,11 @@ def render_object_memory_game():
                     unsafe_allow_html=True
                 )
 
+        # --------------------------------------------------------
+        # TIMER
+        # --------------------------------------------------------
+
         timer_placeholder = st.empty()
-
-        # ----------------------------------------------------
-        # COUNTDOWN
-        # ----------------------------------------------------
-
-        import time as time_module
 
         for seconds_left in range(
             memorize_seconds,
@@ -4587,7 +4641,8 @@ def render_object_memory_game():
                     text-align: center;
                     font-size: 20px;
                     font-weight: 700;
-                    margin: 10px 0;
+                    margin-top: 10px;
+                    background: #fffaf0;
                 ">
                     ⏱️ Memorize Timer:
                     {seconds_left}s
@@ -4598,34 +4653,73 @@ def render_object_memory_game():
 
             time_module.sleep(1)
 
-        st.session_state[
-            f"{game_key}_phase"
-        ] = "recall"
+        timer_placeholder.empty()
+
+        # --------------------------------------------------------
+        # MOVE TO RECALL
+        # --------------------------------------------------------
+
+        st.session_state.object_memory_phase = "recall"
 
         st.rerun()
 
-    # ========================================================
-    # RECALL SCREEN
-    # ========================================================
+    # ============================================================
+    # RECALL PHASE
+    # ============================================================
 
-    elif phase == "recall":
+    elif st.session_state.object_memory_phase == "recall":
 
-        options = st.session_state[
-            f"{game_key}_options"
-        ]
-
-        targets = st.session_state[
-            f"{game_key}_targets"
-        ]
-
-        st.markdown(
-            "### 🔎 Which objects did you see earlier?"
+        current_round = (
+            st.session_state.object_memory_round
         )
 
-        st.caption(
+        targets = (
+            st.session_state.object_memory_targets
+        )
+
+        options = (
+            st.session_state.object_memory_options
+        )
+
+        st.subheader(
+            "🔎 Which Objects Did You See?"
+        )
+
+        st.progress(
+            current_round / total_rounds,
+            text=(
+                f"Round {current_round} "
+                f"of {total_rounds}"
+            )
+        )
+
+        st.write(
             f"Select the {memory_count} objects "
-            "that were shown during memorization."
+            "that you saw in the previous screen."
         )
+
+        # --------------------------------------------------------
+        # EXIT GAME
+        # --------------------------------------------------------
+
+        if st.button(
+            "🚪 Exit Game",
+            key=(
+                f"object_memory_exit_"
+                f"{current_round}"
+            ),
+            use_container_width=True
+        ):
+
+            exit_current_game(
+                "Object Memory Recall"
+            )
+
+        st.divider()
+
+        # --------------------------------------------------------
+        # RECALL OPTIONS
+        # --------------------------------------------------------
 
         selected_names = []
 
@@ -4633,41 +4727,48 @@ def render_object_memory_game():
 
         for index, item in enumerate(options):
 
-            with columns[
-                index % 2
-            ]:
+            with columns[index % 2]:
 
                 selected = st.checkbox(
-                    f"{item[0]}  {item[1]} ({item[2]})",
-                    key=f"object_memory_choice_{index}"
+                    f"{item[0]}  {item[1]}",
+                    key=(
+                        f"object_memory_choice_"
+                        f"{current_round}_"
+                        f"{index}"
+                    )
+                )
+
+                st.caption(
+                    item[2]
                 )
 
                 if selected:
+
                     selected_names.append(
                         item[1]
                     )
 
-        st.session_state[
-            f"{game_key}_selected"
-        ] = selected_names
-
-        st.write("")
-
-        st.caption(
+        st.write(
             f"Selected: {len(selected_names)} / "
             f"{memory_count}"
         )
 
-        # ----------------------------------------------------
-        # SUBMIT
-        # ----------------------------------------------------
+        # --------------------------------------------------------
+        # SUBMIT BUTTON
+        # --------------------------------------------------------
 
         if len(selected_names) != memory_count:
 
             st.button(
-                f"✅ Complete & Save Result "
-                f"({len(selected_names)} Selected)",
-                key="object_memory_submit_disabled",
+                (
+                    f"Submit Round "
+                    f"({len(selected_names)}/"
+                    f"{memory_count})"
+                ),
+                key=(
+                    f"object_memory_submit_disabled_"
+                    f"{current_round}"
+                ),
                 disabled=True,
                 use_container_width=True
             )
@@ -4675,9 +4776,11 @@ def render_object_memory_game():
         else:
 
             if st.button(
-                f"✅ Complete & Save Result "
-                f"({len(selected_names)} Selected)",
-                key="object_memory_submit",
+                "✅ Submit Round",
+                key=(
+                    f"object_memory_submit_"
+                    f"{current_round}"
+                ),
                 type="primary",
                 use_container_width=True
             ):
@@ -4698,183 +4801,113 @@ def render_object_memory_game():
                 )
 
                 wrong = len(
-                    selected_set - target_names
+                    selected_set -
+                    target_names
                 )
 
-                # Correct selections are rewarded.
-                # Wrong selections receive a small penalty.
-                raw_score = (
+                # ------------------------------------------------
+                # SCORE CALCULATION
+                # ------------------------------------------------
+
+                round_score = (
                     (
                         correct -
                         (wrong * 0.25)
                     )
-                    / memory_count
+                    /
+                    memory_count
                 ) * 100
 
-                final_score = int(
-                    round(
-                        max(
-                            0,
-                            min(
-                                100,
-                                raw_score
-                            )
+                round_score = max(
+                    0,
+                    min(
+                        100,
+                        round_score
+                    )
+                )
+
+                st.session_state.object_memory_total_score += (
+                    round_score
+                )
+
+                # ------------------------------------------------
+                # FINAL ROUND
+                # ------------------------------------------------
+
+                if current_round >= total_rounds:
+
+                    final_score = (
+                        st.session_state.object_memory_total_score
+                        /
+                        total_rounds
+                    )
+
+                    final_score = max(
+                        0,
+                        min(
+                            100,
+                            final_score
                         )
                     )
-                )
 
-                st.session_state[
-                    f"{game_key}_score"
-                ] = final_score
-
-                # Save result using the existing database system.
-                save_completed_game(
-                    "Object Memory Recall",
-                    final_score
-                )
-
-                # Use your existing adaptive difficulty system.
-                old_difficulty, new_difficulty, result = (
-                    update_adaptive_difficulty(
-                        user_id,
+                    # Save result
+                    save_completed_game(
+                        "Object Memory Recall",
                         final_score
                     )
-                )
 
-                st.session_state[
-                    f"{game_key}_phase"
-                ] = "result"
+                    # Adaptive difficulty
+                    old_difficulty, new_difficulty, result = (
+                        update_adaptive_difficulty(
+                            user_id,
+                            final_score
+                        )
+                    )
 
-                queue_voice(
-                    game_result_voice(
-                        "Object Memory Recall Game",
-                        final_score,
-                        old_difficulty,
-                        new_difficulty,
+                    # Reset game state
+                    reset_object_memory_game()
+
+                    # Voice result
+                    queue_voice(
+                        game_result_voice(
+                            "Object Memory Recall",
+                            round(
+                                final_score,
+                                1
+                            ),
+                            old_difficulty,
+                            new_difficulty,
+                            language
+                        ),
                         language
-                    ),
-                    language
-                )
+                    )
 
-                st.rerun()
+                    st.rerun()
 
-    # ========================================================
-    # RESULT SCREEN
-    # ========================================================
+                # ------------------------------------------------
+                # NEXT ROUND
+                # ------------------------------------------------
 
-    elif phase == "result":
+                else:
 
-        final_score = int(
-            st.session_state[
-                f"{game_key}_score"
-            ]
-        )
+                    next_round = (
+                        current_round + 1
+                    )
 
-        st.markdown(
-            f"""
-            <div style="
-                border-radius: 18px;
-                padding: 25px;
-                text-align: center;
-                background: #f5f7fa;
-                margin: 15px 0;
-            ">
+                    prepare_object_memory_round(
+                        next_round
+                    )
 
-                <div style="
-                    font-size: 45px;
-                ">
-                    🧠
-                </div>
+                    queue_voice(
+                        (
+                            f"Round {next_round} "
+                            f"of {total_rounds}. "
+                            f"Remember {memory_count} objects."
+                        ),
+                        language
+                    )
 
-                <div style="
-                    font-size: 26px;
-                    font-weight: 800;
-                ">
-                    Object Memory Recall Complete
-                </div>
-
-                <div style="
-                    font-size: 23px;
-                    margin-top: 10px;
-                ">
-                    Score:
-                    <strong>{final_score}/100</strong>
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-        if final_score >= 80:
-
-            st.success(
-                "🎉 Excellent memory! "
-                "You remembered the objects very well."
-            )
-
-        elif final_score >= 50:
-
-            st.info(
-                "👍 Good effort! "
-                "Keep practicing your memory."
-            )
-
-        else:
-
-            st.warning(
-                "💪 Keep practicing. "
-                "Regular memory exercises can help "
-                "you improve your recall."
-            )
-
-        st.write("")
-
-        result_col1, result_col2 = st.columns(2)
-
-        with result_col1:
-
-            if st.button(
-                "🔄 Play Again",
-                key="object_memory_again",
-                use_container_width=True
-            ):
-
-                st.session_state[
-                    f"{game_key}_phase"
-                ] = "start"
-
-                st.session_state[
-                    f"{game_key}_targets"
-                ] = []
-
-                st.session_state[
-                    f"{game_key}_options"
-                ] = []
-
-                st.session_state[
-                    f"{game_key}_selected"
-                ] = []
-
-                st.session_state[
-                    f"{game_key}_score"
-                ] = 0
-
-                st.rerun()
-
-        with result_col2:
-
-            if st.button(
-                "↩️ Back to Games",
-                key="object_memory_back",
-                use_container_width=True
-            ):
-
-                st.session_state[
-                    f"{game_key}_phase"
-                ] = "start"
-
-                st.rerun()
+                    st.rerun()
                 
 def save_completed_game(game_name, final_score):
     conn.execute(
