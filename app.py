@@ -30,7 +30,6 @@
 # 24. Multilingual voice output
 # 25. Multilingual voice recognition
 # 26. Multilingual UI
-# 27. Round completion voice feedback
 # 27. Game Exit Option
 # 28. 15-20 Round Cognitive Games
 # 29. Last 5 Games Progress Graph
@@ -1591,6 +1590,66 @@ def parse_time_from_command(command):
         return f"{hour:02d}:{minute:02d}"
 
     return None
+
+
+# ============================================================
+# REMINDER CATEGORY HELPERS
+# ============================================================
+
+REMINDER_CATEGORIES = {
+    "💊 Medicine": "Medicine",
+    "💧 Hydration": "Hydration",
+    "🏃 Daily Activity": "Daily Activity",
+    "🩺 Medical Appointment": "Medical Appointment",
+    "🔔 General Reminder": "General Reminder",
+}
+
+
+def detect_reminder_category(command):
+    """Automatically detect a reminder category from a voice command."""
+    command = (command or "").lower()
+
+    medicine_words = [
+        "medicine", "medication", "tablet", "pill", "capsule",
+        "दवा", "गोली", "औषध", "औषधि", "औषधं",
+        "অসমীয়া ঔষধ", "ঔষধ", "ওষুধ",
+    ]
+    hydration_words = [
+        "water", "drink water", "hydration", "hydrate",
+        "পানি", "জল", "पाणी", "जल",
+    ]
+    activity_words = [
+        "daily activity", "walk", "walking", "exercise",
+        "activity", "stretch", "workout",
+        "দৈনিক কাৰ্যকলাপ", "হাঁটা", "চলাফেরা",
+    ]
+    appointment_words = [
+        "medical appointment", "doctor appointment", "appointment",
+        "doctor visit", "clinic", "hospital",
+        "डॉक्टर की अपॉइंटमेंट", "भेट", "अपॉइंटमेंट",
+    ]
+
+    if any(word in command for word in medicine_words):
+        return "Medicine"
+    if any(word in command for word in hydration_words):
+        return "Hydration"
+    if any(word in command for word in activity_words):
+        return "Daily Activity"
+    if any(word in command for word in appointment_words):
+        return "Medical Appointment"
+
+    return "General Reminder"
+
+
+def reminder_prefix(category):
+    prefixes = {
+        "Medicine": "💊 Medicine",
+        "Hydration": "💧 Hydration",
+        "Daily Activity": "🏃 Daily Activity",
+        "Medical Appointment": "🩺 Medical Appointment",
+        "General Reminder": "🔔 General Reminder",
+    }
+    return prefixes.get(category, "🔔 General Reminder")
 
 
 # ============================================================
@@ -3463,6 +3522,15 @@ with st.sidebar:
                             )
                         )
 
+                        reminder_category = detect_reminder_category(
+                            command
+                        )
+
+                        reminder_title = (
+                            f"{reminder_prefix(reminder_category)}: "
+                            f"{reminder_title}"
+                        )
+
                         conn.execute(
                             """
                             INSERT INTO reminders(
@@ -4084,15 +4152,6 @@ elif selected_page == "games":
 
                             else:
 
-                                queue_voice(
-                                    (
-                                        f"Congratulations! You completed round {current_round} "
-                                        f"of {total_rounds} with a score of {round(round_score, 1)}. "
-                                        f"Now moving to round {current_round + 1}."
-                                    ),
-                                    language
-                                )
-
                                 next_round = current_round + 1
                                 st.session_state.memory_round = next_round
                                 st.session_state.memory_sequence = random.sample(
@@ -4265,15 +4324,6 @@ elif selected_page == "games":
 
                         else:
 
-                            queue_voice(
-                                (
-                                    f"Congratulations! You completed round {current_round} "
-                                    f"of {total_rounds} with a score of {round(round_score, 1)}. "
-                                    f"Now moving to round {current_round + 1}."
-                                ),
-                                language
-                            )
-
                             next_round = current_round + 1
                             st.session_state.pattern_round = next_round
                             st.session_state.pattern_sequence = [
@@ -4398,15 +4448,6 @@ elif selected_page == "games":
 
                         else:
 
-                            queue_voice(
-                                (
-                                    f"Congratulations! You completed round {current_round} "
-                                    f"of {total_rounds} with a score of {round(round_score, 1)}. "
-                                    f"Now moving to round {current_round + 1}."
-                                ),
-                                language
-                            )
-
                             st.session_state.attention_round = current_round + 1
                             st.session_state.reaction_target = random.randint(1, 9)
 
@@ -4431,9 +4472,27 @@ elif selected_page == "reminders":
         "➕ Add New Reminder"
     )
 
+    reminder_category_label = st.selectbox(
+        "Reminder Type",
+        list(REMINDER_CATEGORIES.keys()),
+        key="reminder_category"
+    )
+
+    reminder_category = REMINDER_CATEGORIES[
+        reminder_category_label
+    ]
+
+    reminder_examples = {
+        "Medicine": "Example: Take morning medicine",
+        "Hydration": "Example: Drink water",
+        "Daily Activity": "Example: Go for a 20 minute walk",
+        "Medical Appointment": "Example: Doctor appointment",
+        "General Reminder": "Example: Call family",
+    }
+
     reminder_title = st.text_input(
         "Reminder Title",
-        placeholder="Example: Drink water",
+        placeholder=reminder_examples[reminder_category],
         key="reminder_title"
     )
 
@@ -4467,6 +4526,11 @@ elif selected_page == "reminders":
                 )
             )
 
+            stored_reminder_title = (
+                f"{reminder_prefix(reminder_category)}: "
+                f"{reminder_title.strip()}"
+            )
+
             conn.execute(
                 """
                 INSERT INTO reminders(
@@ -4484,7 +4548,7 @@ elif selected_page == "reminders":
                 """,
                 (
                     user_id,
-                    reminder_title.strip(),
+                    stored_reminder_title,
                     (
                         f"{date.today()} "
                         f"{formatted_time}"
@@ -4496,9 +4560,8 @@ elif selected_page == "reminders":
 
             queue_voice(
                 (
-                    f"{reminder_title.strip()} "
-                    f"reminder has been added "
-                    f"for {formatted_time}."
+                    f"{reminder_category} reminder added: "
+                    f"{reminder_title.strip()} for {formatted_time}."
                 ),
                 language
             )
