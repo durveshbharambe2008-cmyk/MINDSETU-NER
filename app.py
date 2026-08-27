@@ -45,10 +45,14 @@
 # 39. Memory sequence hides automatically before answer entry
 # 40. Congratulations message after strong game completion
 # 41. Visible adaptive difficulty increase notification
+# 42. Image Recognition / Image Memory Game
+# 43. 10-second image viewing countdown
+# 44. Image answers activate only after countdown reaches 0
+# 45. Image game results saved to performance history
 #
 # INSTALL:
 #
-# pip install "streamlit>=1.37" gTTS SpeechRecognition streamlit-mic-recorder reportlab pandas
+# pip install streamlit gTTS SpeechRecognition streamlit-mic-recorder reportlab pandas streamlit-autorefresh
 #
 # RUN:
 #
@@ -64,11 +68,11 @@ import io
 import re
 import base64
 import textwrap
-import math
 import pandas as pd
 
 from datetime import datetime, date, time
 from uuid import uuid4
+import time as pytime
 
 try:
     from reportlab.lib import colors
@@ -110,6 +114,14 @@ try:
     from streamlit_mic_recorder import mic_recorder
 except ImportError:
     mic_recorder = None
+
+
+# Reliable one-second browser-driven reruns for countdown games.
+# This is used instead of time.sleep(), which would block Streamlit UI updates.
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    st_autorefresh = None
 
 
 # ============================================================
@@ -1809,14 +1821,19 @@ DEFAULT_SESSION_VALUES = {
 
     "memory_round": 0,
     "memory_total_score": 0.0,
-    # Timestamp used by the 10-second live countdown.
-    # The answer input is not rendered until this period has elapsed.
-    "memory_display_started_at": None,
-    "memory_timer_finished": False,
     "pattern_round": 0,
     "pattern_total_score": 0.0,
     "attention_round": 0,
     "attention_total_score": 0.0,
+
+    # Image Recognition / Image Memory Game state.
+    "image_memory_round": 0,
+    "image_memory_total_score": 0.0,
+    "image_memory_sequence": [],
+    "image_memory_choices": [],
+    "image_memory_start_time": None,
+    "image_memory_answer_phase": False,
+    "image_memory_selected": [],
 
     # Visible result message shown after a completed game.
     "game_result_message": None,
@@ -1831,6 +1848,10 @@ for key, value in DEFAULT_SESSION_VALUES.items():
     if key not in st.session_state:
 
         st.session_state[key] = value
+
+# Backward-compatible image choice state for existing sessions.
+if "image_memory_choices" not in st.session_state:
+    st.session_state.image_memory_choices = []
 
 
 # ============================================================
@@ -4334,9 +4355,6 @@ def reset_memory_game():
     st.session_state.memory_sequence = None
     st.session_state.memory_round = 0
     st.session_state.memory_total_score = 0.0
-    st.session_state.memory_display_started_at = None
-    st.session_state.memory_timer_finished = False
-    st.session_state.memory_display_started_at = None
 
 
 def reset_pattern_game():
@@ -4351,6 +4369,17 @@ def reset_attention_game():
     st.session_state.attention_total_score = 0.0
 
 
+def reset_image_memory_game():
+    """Reset all state for the patient-only Image Recognition game."""
+    st.session_state.image_memory_round = 0
+    st.session_state.image_memory_total_score = 0.0
+    st.session_state.image_memory_sequence = []
+    st.session_state.image_memory_choices = []
+    st.session_state.image_memory_start_time = None
+    st.session_state.image_memory_answer_phase = False
+    st.session_state.image_memory_selected = []
+
+
 def exit_current_game(game_name):
     if game_name == "Memory Sequence":
         reset_memory_game()
@@ -4358,6 +4387,8 @@ def exit_current_game(game_name):
         reset_pattern_game()
     elif game_name == "Attention Game":
         reset_attention_game()
+    elif game_name == "Image Recognition":
+        reset_image_memory_game()
 
     queue_voice(
         f"You exited the {game_name}. The unfinished game was not saved.",
@@ -4383,6 +4414,213 @@ def save_completed_game(game_name, final_score):
         )
     )
     conn.commit()
+
+
+# ============================================================
+# IMAGE RECOGNITION GAME ASSETS
+# ============================================================
+#
+# The image game is fully self-contained: it does not require an external
+# image directory or another Python package. Each image card is represented
+# by a clean visual card containing an image-like emoji illustration.
+#
+# The game randomly chooses a target set, displays those image cards for
+# exactly 10 seconds, hides them at 0 seconds, and only then activates the
+# answer choices. A one-second Streamlit autorefresh keeps the countdown and
+# phase transition synchronized without blocking the application.
+# ============================================================
+
+IMAGE_GAME_ITEMS = {
+    "apple": {"label": "Apple", "emoji": "🍎", "bg": "#FFE4E6"},
+    "book": {"label": "Book", "emoji": "📚", "bg": "#E0F2FE"},
+    "car": {"label": "Car", "emoji": "🚗", "bg": "#FEF3C7"},
+    "dog": {"label": "Dog", "emoji": "🐶", "bg": "#DCFCE7"},
+    "flower": {"label": "Flower", "emoji": "🌸", "bg": "#FCE7F3"},
+    "house": {"label": "House", "emoji": "🏠", "bg": "#EDE9FE"},
+    "moon": {"label": "Moon", "emoji": "🌙", "bg": "#E0E7FF"},
+    "parrot": {"label": "Parrot", "emoji": "🦜", "bg": "#CCFBF1"},
+    "pencil": {"label": "Pencil", "emoji": "✏️", "bg": "#FEF9C3"},
+    "phone": {"label": "Phone", "emoji": "📱", "bg": "#E2E8F0"},
+    "sun": {"label": "Sun", "emoji": "☀️", "bg": "#FFEDD5"},
+    "tree": {"label": "Tree", "emoji": "🌳", "bg": "#D1FAE5"},
+    "umbrella": {"label": "Umbrella", "emoji": "☂️", "bg": "#DBEAFE"},
+    "watch": {"label": "Watch", "emoji": "⌚", "bg": "#F1F5F9"},
+    "ball": {"label": "Ball", "emoji": "⚽", "bg": "#E5E7EB"},
+    "camera": {"label": "Camera", "emoji": "📷", "bg": "#F3F4F6"},
+}
+
+IMAGE_GAME_DIFFICULTY = {
+    1: {"target_count": 4, "choice_count": 8},
+    2: {"target_count": 6, "choice_count": 10},
+    3: {"target_count": 8, "choice_count": 12},
+}
+
+
+def image_card_html(item_key, compact=False):
+    """Return a clear image-like card for the image memory game."""
+    item = IMAGE_GAME_ITEMS[item_key]
+    width = 105 if compact else 140
+    height = 125 if compact else 150
+    emoji_size = 48 if compact else 64
+    label_size = 12 if compact else 15
+
+    return f"""
+    <div style="
+        width:{width}px;
+        min-height:{height}px;
+        border-radius:18px;
+        padding:10px;
+        box-sizing:border-box;
+        background:{item['bg']};
+        border:2px solid rgba(79,70,229,.18);
+        display:flex;
+        flex-direction:column;
+        justify-content:center;
+        align-items:center;
+        box-shadow:0 6px 18px rgba(15,23,42,.10);
+        margin:auto;
+    ">
+        <div style="font-size:{emoji_size}px;line-height:1.1;">{item['emoji']}</div>
+        <div style="margin-top:8px;font-weight:800;font-size:{label_size}px;color:#1E293B;text-align:center;">
+            {item['label']}
+        </div>
+    </div>
+    """
+
+
+def render_image_cards(item_keys, compact=False):
+    """Render image cards in a centered responsive flex container."""
+    cards = "".join(
+        image_card_html(key, compact=compact)
+        for key in item_keys
+    )
+
+    return f"""
+    <div style="
+        display:flex;
+        flex-wrap:wrap;
+        justify-content:center;
+        align-items:center;
+        gap:14px;
+        width:100%;
+        padding:8px 0;
+    ">
+        {cards}
+    </div>
+    """
+
+
+def image_countdown_banner(seconds_remaining):
+    """Return a large, readable countdown badge."""
+    if seconds_remaining <= 0:
+        return """
+        <div style="
+            display:block;
+            width:max-content;
+            margin:8px auto;
+            padding:10px 20px;
+            border-radius:999px;
+            background:#DCFCE7;
+            color:#166534;
+            font-weight:900;
+            font-size:18px;
+            border:2px solid #86EFAC;
+        ">
+            ✅ 0 seconds - images hidden
+        </div>
+        """
+
+    return f"""
+    <div style="
+        display:block;
+        width:max-content;
+        min-width:130px;
+        margin:8px auto;
+        padding:10px 22px;
+        border-radius:999px;
+        background:#3730A3;
+        color:white;
+        font-weight:900;
+        text-align:center;
+        font-size:21px;
+        border:2px solid #818CF8;
+        box-shadow:0 5px 18px rgba(55,48,163,.25);
+    ">
+        ⏱️ {seconds_remaining} seconds
+    </div>
+    """
+
+
+def image_remaining_seconds():
+    """Calculate remaining 10-second viewing time without time.sleep()."""
+    start = st.session_state.get("image_memory_start_time")
+
+    if start is None:
+        return 0
+
+    elapsed = pytime.time() - float(start)
+    return max(0, 10 - int(elapsed))
+
+
+def prepare_image_memory_round(difficulty_level, round_number):
+    """Create a target image set and distractor choices for a new round."""
+    config = IMAGE_GAME_DIFFICULTY[difficulty_level]
+    all_keys = list(IMAGE_GAME_ITEMS.keys())
+
+    target_keys = random.sample(
+        all_keys,
+        config["target_count"]
+    )
+
+    remaining_keys = [
+        key
+        for key in all_keys
+        if key not in target_keys
+    ]
+
+    distractor_count = (
+        config["choice_count"]
+        - config["target_count"]
+    )
+
+    distractors = random.sample(
+        remaining_keys,
+        distractor_count
+    )
+
+    answer_choices = target_keys + distractors
+    random.shuffle(answer_choices)
+
+    st.session_state.image_memory_sequence = target_keys
+    st.session_state.image_memory_choices = answer_choices
+    st.session_state.image_memory_round = round_number
+    st.session_state.image_memory_total_score = (
+        st.session_state.get("image_memory_total_score", 0.0)
+    )
+    st.session_state.image_memory_start_time = pytime.time()
+    st.session_state.image_memory_answer_phase = False
+    st.session_state.image_memory_selected = []
+
+
+def save_image_game_result(final_score, old_difficulty, new_difficulty):
+    """Save a completed image game and populate the common result banner."""
+    rounded_score = round(float(final_score), 1)
+
+    save_completed_game(
+        "Image Recognition",
+        rounded_score
+    )
+
+    st.session_state.game_result_message = game_result_voice(
+        "Image Recognition Game",
+        rounded_score,
+        old_difficulty,
+        new_difficulty,
+        language
+    )
+    st.session_state.game_result_score = rounded_score
+    st.session_state.game_result_old_difficulty = old_difficulty
+    st.session_state.game_result_new_difficulty = new_difficulty
 
 
 # ============================================================
@@ -4580,11 +4818,12 @@ elif selected_page == "games":
         "lower performance decreases it."
     )
 
-    game_tab1, game_tab2, game_tab3 = st.tabs(
+    game_tab1, game_tab2, game_tab3, game_tab4 = st.tabs(
         [
             "🧠 Memory Sequence",
             "🔷 Pattern Memory",
-            "⚡ Attention Game"
+            "⚡ Attention Game",
+            "🖼️ Image Recognition"
         ]
     )
 
@@ -4602,10 +4841,6 @@ elif selected_page == "games":
             3: 8
         }[difficulty]
 
-        # ====================================================
-        # START MEMORY GAME
-        # ====================================================
-
         if st.session_state.memory_round == 0:
 
             st.write(
@@ -4621,22 +4856,15 @@ elif selected_page == "games":
 
                 st.session_state.memory_round = 1
                 st.session_state.memory_total_score = 0.0
-
                 st.session_state.memory_sequence = random.sample(
                     range(1, 10),
                     sequence_length
                 )
 
-                # Start a fresh 10-second viewing period.
-                st.session_state.memory_display_started_at = (
-                    datetime.now().timestamp()
-                )
-                st.session_state.memory_timer_finished = False
-
                 queue_voice(
                     f"Memory game started. Round 1 of {total_rounds}. "
-                    f"Remember these {sequence_length} numbers for 10 seconds. "
-                    "The numbers will disappear when the timer reaches zero.",
+                    f"You have 10 seconds to remember {sequence_length} numbers. "
+                    "The numbers will then disappear. Enter the sequence from memory.",
                     language
                 )
 
@@ -4652,385 +4880,201 @@ elif selected_page == "games":
                 text=f"Round {current_round} of {total_rounds}"
             )
 
-            MEMORY_VIEW_SECONDS = 10
+            # --------------------------------------------------------
+            # 10-SECOND MEMORY DISPLAY
+            # --------------------------------------------------------
+            # The sequence is rendered in the browser and hidden exactly
+            # 10 seconds after the round is displayed. The answer is still
+            # checked against the original server-side sequence.
+            sequence_text = " • ".join(
+                str(number)
+                for number in sequence
+            )
 
-            # ------------------------------------------------
-            # Ensure every round starts in the 10-second display
-            # mode exactly once.
-            # ------------------------------------------------
+            memory_box_id = f"memory_display_{user_id}_{current_round}"
+            memory_count_id = f"memory_countdown_{user_id}_{current_round}"
 
-            if st.session_state.get("memory_display_started_at") is None and not st.session_state.get("memory_timer_finished", False):
+            st.html(
+                f"""
+                <div id=\"{memory_box_id}\" style=\"
+                    padding:22px;
+                    border-radius:16px;
+                    text-align:center;
+                    margin:10px 0 16px 0;
+                    border:2px solid #4F46E5;
+                    background:linear-gradient(135deg,#EEF2FF,#F5F3FF);
+                ">
+                    <div style=\"font-size:17px;font-weight:600;margin-bottom:8px;\">
+                        🧠 Remember these numbers for 10 seconds
+                    </div>
+                    <div style=\"font-size:34px;font-weight:800;letter-spacing:8px;\">
+                        {sequence_text}
+                    </div>
+                    <div id=\"{memory_count_id}\" style=\"
+                        margin-top:10px;
+                        font-size:15px;
+                        font-weight:600;
+                    ">
+                        Numbers disappear in 10 seconds...
+                    </div>
+                </div>
+                <script>
+                    (function() {{
+                        const box = document.getElementById(\"{memory_box_id}\");
+                        const countdown = document.getElementById(\"{memory_count_id}\");
+                        if (!box || !countdown) return;
 
-                st.session_state.memory_display_started_at = (
-                    datetime.now().timestamp()
-                )
+                        let seconds = 10;
+                        countdown.textContent = `Numbers disappear in ${{seconds}} seconds...`;
 
-            # ------------------------------------------------
-            # LIVE COUNTDOWN FRAGMENT
-            # ------------------------------------------------
-            # IMPORTANT: The countdown card itself is inside the
-            # fragment. Therefore it is redrawn every 0.1 seconds.
-            # The previous version only reran an invisible fragment,
-            # so the displayed "10 seconds" never changed.
-            # ------------------------------------------------
+                        const timer = setInterval(function() {{
+                            seconds -= 1;
+                            if (seconds > 0) {{
+                                countdown.textContent = `Numbers disappear in ${{seconds}} seconds...`;
+                            }} else {{
+                                clearInterval(timer);
+                                box.innerHTML = `
+                                    <div style=\"font-size:20px;font-weight:700;\">
+                                        ✅ Time is up — the numbers have disappeared.
+                                    </div>
+                                    <div style=\"font-size:15px;margin-top:6px;\">
+                                        Enter the sequence from memory below.
+                                    </div>
+                                `;
+                            }}
+                        }}, 1000);
+                    }})();
+                </script>
+                """,
+                width="stretch"
+            )
 
-            if not st.session_state.get("memory_timer_finished", False):
+            st.info(
+                "⏱️ The sequence is visible for exactly 10 seconds. "
+                "After it disappears, enter the numbers in the same order."
+            )
 
-                @st.fragment(run_every=0.1)
-                def render_memory_countdown():
+            answer = st.text_input(
+                "Enter the numbers in the same order after the 10-second display",
+                key=f"memory_answer_{current_round}"
+            )
 
-                    started_at = st.session_state.get(
-                        "memory_display_started_at"
-                    )
+            exit_col, submit_col = st.columns(2)
 
-                    if started_at is None:
-                        return
+            with exit_col:
 
-                    elapsed = (
-                        datetime.now().timestamp()
-                        - float(started_at)
-                    )
-
-                    remaining = max(
-                        0,
-                        int(math.ceil(
-                            MEMORY_VIEW_SECONDS - elapsed
-                        ))
-                    )
-
-                    # While time remains, show the numbers and
-                    # the live countdown.
-                    if remaining > 0:
-
-                        st.html(
-                            f"""
-                            <div style="
-                                border:3px solid #4F46E5;
-                                border-radius:20px;
-                                padding:30px 24px;
-                                text-align:center;
-                                background:linear-gradient(
-                                    135deg,
-                                    #EEF2FF,
-                                    #F5F3FF
-                                );
-                                margin-top:15px;
-                                margin-bottom:18px;
-                                box-shadow:0 8px 25px rgba(79,70,229,0.18);
-                            ">
-                                <div style="
-                                    font-size:20px;
-                                    font-weight:800;
-                                    color:#312E81;
-                                    margin-bottom:18px;
-                                ">
-                                    🧠 Remember these numbers
-                                </div>
-
-                                <div style="
-                                    font-size:40px;
-                                    font-weight:900;
-                                    color:#111827;
-                                    letter-spacing:8px;
-                                    line-height:1.5;
-                                    margin-bottom:20px;
-                                ">
-                                    {" • ".join(str(number) for number in sequence)}
-                                </div>
-
-                                <div style="
-                                    display:inline-block;
-                                    min-width:170px;
-                                    padding:11px 24px;
-                                    border-radius:999px;
-                                    background:#3730A3;
-                                    color:white;
-                                    font-size:22px;
-                                    font-weight:900;
-                                ">
-                                    ⏱️ {remaining} seconds
-                                </div>
-                            </div>
-                            """,
-                            width="stretch"
-                        )
-
-                        st.info(
-                            f"⏱️ Memorize the sequence. The numbers will disappear when the countdown reaches 0. Time remaining: **{remaining} seconds**."
-                        )
-
-                    else:
-
-                        # Freeze the state first. The next full app
-                        # rerun will enter the answer branch.
-                        st.session_state.memory_timer_finished = True
-                        st.session_state.memory_display_started_at = None
-
-                        # Show an explicit zero state before switching.
-                        st.html(
-                            """
-                            <div style="
-                                border:3px solid #DC2626;
-                                border-radius:20px;
-                                padding:28px 24px;
-                                text-align:center;
-                                background:#FEF2F2;
-                                margin-top:15px;
-                                margin-bottom:18px;
-                            ">
-                                <div style="
-                                    font-size:30px;
-                                    font-weight:900;
-                                    color:#B91C1C;
-                                ">
-                                    ⏱️ 0 seconds
-                                </div>
-                                <div style="
-                                    font-size:18px;
-                                    font-weight:800;
-                                    color:#991B1B;
-                                    margin-top:8px;
-                                ">
-                                    Numbers disappeared!
-                                </div>
-                            </div>
-                            """,
-                            width="stretch"
-                        )
-
-                        # Explicit app-scoped rerun is required here.
-                        st.rerun(scope="app")
-
-                render_memory_countdown()
-
-                # Exit is still available during the viewing period.
                 if st.button(
                     "🚪 Exit Game",
-                    key=f"memory_exit_view_{current_round}",
+                    key=f"memory_exit_{current_round}",
                     use_container_width=True
                 ):
                     exit_current_game("Memory Sequence")
 
-            # ------------------------------------------------
-            # ANSWER MODE
-            # ------------------------------------------------
+            with submit_col:
 
-            else:
+                if st.button(
+                    "Submit Round",
+                    key=f"memory_submit_{current_round}",
+                    type="primary",
+                    use_container_width=True
+                ):
 
-                # The timer has already finished. The sequence is
-                # intentionally NOT shown here. Only the answer box
-                # and submit button are available.
+                    try:
 
-                st.success(
-                    "✅ Time is up! The numbers have disappeared. "
-                    "Now enter the sequence in the same order."
-                )
+                        user_answer = [
+                            int(x)
+                            for x in re.split(
+                                r"[,\s]+",
+                                answer.strip()
+                            )
+                            if x
+                        ]
 
-                st.html(
-                    """
-                    <div style="
-                        border:3px solid #16A34A;
-                        border-radius:20px;
-                        padding:28px 24px;
-                        text-align:center;
-                        background:linear-gradient(
-                            135deg,
-                            #ECFDF5,
-                            #F0FDF4
-                        );
-                        margin-top:15px;
-                        margin-bottom:18px;
-                    ">
-                        <div style="
-                            font-size:30px;
-                            font-weight:900;
-                            color:#166534;
-                        ">
-                            ✅ 0 seconds
-                        </div>
-                        <div style="
-                            font-size:19px;
-                            font-weight:700;
-                            color:#166534;
-                            margin-top:8px;
-                        ">
-                            Numbers disappeared!
-                        </div>
-                    </div>
-                    """,
-                    width="stretch"
-                )
+                        if len(user_answer) != len(sequence):
 
-                st.info(
-                    "✍️ The sequence is now hidden. Enter the numbers you remembered."
-                )
+                            st.error(
+                                f"Enter exactly {len(sequence)} numbers."
+                            )
 
-                answer = st.text_input(
-                    "Enter the numbers in the same order",
-                    placeholder=(
-                        f"Enter exactly {len(sequence)} numbers, "
-                        "for example: 9 2 3 8"
-                    ),
-                    key=f"memory_answer_{current_round}"
-                )
+                        else:
 
-                exit_col, submit_col = st.columns(2)
-
-                with exit_col:
-
-                    if st.button(
-                        "🚪 Exit Game",
-                        key=f"memory_exit_{current_round}",
-                        use_container_width=True
-                    ):
-                        exit_current_game("Memory Sequence")
-
-                with submit_col:
-
-                    if st.button(
-                        "✅ Submit Round",
-                        key=f"memory_submit_{current_round}",
-                        type="primary",
-                        use_container_width=True
-                    ):
-
-                        try:
-
-                            user_answer = [
-                                int(x)
-                                for x in re.split(
-                                    r"[,\s]+",
-                                    answer.strip()
+                            correct = sum(
+                                a == b
+                                for a, b in zip(
+                                    sequence,
+                                    user_answer
                                 )
-                                if x
-                            ]
+                            )
 
-                            if len(user_answer) != len(sequence):
+                            round_score = (
+                                correct /
+                                len(sequence)
+                            ) * 100
 
-                                st.error(
-                                    f"Please enter exactly {len(sequence)} numbers."
+                            st.session_state.memory_total_score += round_score
+
+                            if current_round >= total_rounds:
+
+                                final_score = (
+                                    st.session_state.memory_total_score /
+                                    total_rounds
                                 )
 
-                            else:
-
-                                correct = sum(
-                                    a == b
-                                    for a, b in zip(
-                                        sequence,
-                                        user_answer
-                                    )
+                                save_completed_game(
+                                    "Memory Sequence",
+                                    final_score
                                 )
 
-                                round_score = (
-                                    correct /
-                                    len(sequence)
-                                ) * 100
-
-                                st.session_state.memory_total_score += round_score
-
-                                # ------------------------------------
-                                # FINAL ROUND
-                                # ------------------------------------
-
-                                if current_round >= total_rounds:
-
-                                    final_score = (
-                                        st.session_state.memory_total_score /
-                                        total_rounds
-                                    )
-
-                                    save_completed_game(
-                                        "Memory Sequence",
+                                old_difficulty, new_difficulty, result = (
+                                    update_adaptive_difficulty(
+                                        user_id,
                                         final_score
                                     )
+                                )
 
-                                    old_difficulty, new_difficulty, result = (
-                                        update_adaptive_difficulty(
-                                            user_id,
-                                            final_score
-                                        )
-                                    )
+                                st.session_state.game_result_message = game_result_voice(
+                                    "Memory Game",
+                                    round(final_score, 1),
+                                    old_difficulty,
+                                    new_difficulty,
+                                    language
+                                )
+                                st.session_state.game_result_score = round(final_score, 1)
+                                st.session_state.game_result_old_difficulty = old_difficulty
+                                st.session_state.game_result_new_difficulty = new_difficulty
 
-                                    result_message = game_result_voice(
+                                reset_memory_game()
+
+                                queue_voice(
+                                    game_result_voice(
                                         "Memory Game",
                                         round(final_score, 1),
                                         old_difficulty,
                                         new_difficulty,
                                         language
-                                    )
+                                    ),
+                                    language
+                                )
 
-                                    if final_score >= 70:
+                                st.rerun()
 
-                                        st.success(
-                                            f"🎉 Congratulations! You completed the Memory Sequence Game with a final score of {final_score:.1f}/100."
-                                        )
+                            else:
 
-                                        if new_difficulty > old_difficulty:
-                                            st.info(
-                                                f"⬆️ Excellent performance! Difficulty increased from Level {old_difficulty} to Level {new_difficulty}."
-                                            )
-                                        else:
-                                            st.info(
-                                                f"🏆 Strong performance! Difficulty remains at Level {new_difficulty}."
-                                            )
+                                next_round = current_round + 1
+                                st.session_state.memory_round = next_round
+                                st.session_state.memory_sequence = random.sample(
+                                    range(1, 10),
+                                    sequence_length
+                                )
 
-                                    else:
+                                st.rerun()
 
-                                        st.info(
-                                            f"✅ Memory Sequence Game completed with a final score of {final_score:.1f}/100. Keep practicing!"
-                                        )
+                    except ValueError:
 
-                                        if new_difficulty < old_difficulty:
-                                            st.warning(
-                                                f"⬇️ Difficulty adjusted from Level {old_difficulty} to Level {new_difficulty}."
-                                            )
-                                        else:
-                                            st.info(
-                                                f"Difficulty remains at Level {new_difficulty}."
-                                            )
+                        st.error(
+                            "Please enter numbers only."
+                        )
 
-                                    queue_voice(
-                                        result_message,
-                                        language
-                                    )
-
-                                    st.session_state.game_result_message = result_message
-                                    st.session_state.game_result_score = round(final_score, 1)
-                                    st.session_state.game_result_old_difficulty = old_difficulty
-                                    st.session_state.game_result_new_difficulty = new_difficulty
-
-                                    reset_memory_game()
-                                    st.rerun()
-
-                                # ------------------------------------
-                                # NEXT ROUND
-                                # ------------------------------------
-
-                                else:
-
-                                    next_round = current_round + 1
-
-                                    st.session_state.memory_round = next_round
-
-                                    st.session_state.memory_sequence = (
-                                        random.sample(
-                                            range(1, 10),
-                                            sequence_length
-                                        )
-                                    )
-
-                                    st.session_state.memory_display_started_at = (
-                                        datetime.now().timestamp()
-                                    )
-                                    st.session_state.memory_timer_finished = False
-
-                                    st.rerun()
-
-                        except ValueError:
-
-                            st.error(
-                                "Please enter numbers only, separated by spaces or commas."
-                            )
     # ========================================================
     # PATTERN MEMORY
     # ========================================================
@@ -5338,6 +5382,291 @@ elif selected_page == "games":
                             st.session_state.reaction_target = random.randint(1, 9)
 
                             st.rerun()
+
+
+    # ========================================================
+    # IMAGE RECOGNITION / IMAGE MEMORY GAME
+    # ========================================================
+
+    with game_tab4:
+
+        st.subheader("🖼️ Image Recognition Game")
+
+        image_game_config = IMAGE_GAME_DIFFICULTY[difficulty]
+        image_target_count = image_game_config["target_count"]
+        image_choice_count = image_game_config["choice_count"]
+
+        st.write(
+            f"Remember {image_target_count} images. "
+            "They remain visible for exactly 10 seconds. "
+            "The answer choices activate only after the timer reaches 0."
+        )
+
+        st.info(
+            "🧠 How it works: memorize the image cards → watch the countdown "
+            "10 → 9 → 8 → ... → 1 → 0 → images disappear → answer section activates."
+        )
+
+        # ----------------------------------------------------
+        # START IMAGE GAME
+        # ----------------------------------------------------
+        if st.session_state.image_memory_round == 0:
+
+            st.markdown(
+                f"### 🎯 {total_rounds} rounds | "
+                f"{image_target_count} images to remember | "
+                f"{image_choice_count} answer choices"
+            )
+
+            st.markdown(
+                "**Important:** Do not select anything during the 10-second "
+                "viewing phase. Selection becomes available automatically at 0 seconds."
+            )
+
+            if st.button(
+                "▶️ Start Image Recognition Game",
+                type="primary",
+                key="image_memory_start",
+                use_container_width=True
+            ):
+
+                st.session_state.image_memory_total_score = 0.0
+
+                prepare_image_memory_round(
+                    difficulty,
+                    1
+                )
+
+                queue_voice(
+                    f"Image Recognition Game started. Round 1 of {total_rounds}. "
+                    f"Remember {image_target_count} images for 10 seconds.",
+                    language
+                )
+
+                st.rerun()
+
+        # ----------------------------------------------------
+        # ACTIVE IMAGE GAME
+        # ----------------------------------------------------
+        else:
+
+            current_round = st.session_state.image_memory_round
+
+            target_images = st.session_state.image_memory_sequence
+
+            answer_choices = st.session_state.get(
+                "image_memory_choices",
+                []
+            )
+
+            st.progress(
+                current_round / total_rounds,
+                text=f"Round {current_round} of {total_rounds}"
+            )
+
+            # ------------------------------------------------
+            # VIEWING PHASE
+            # ------------------------------------------------
+            remaining = image_remaining_seconds()
+
+            if remaining > 0:
+
+                st.session_state.image_memory_answer_phase = False
+
+                st.markdown(
+                    "### 👀 Memorize these images"
+                )
+
+                st.markdown(
+                    render_image_cards(target_images),
+                    unsafe_allow_html=True
+                )
+
+                st.markdown(
+                    image_countdown_banner(remaining),
+                    unsafe_allow_html=True
+                )
+
+                st.caption(
+                    "🔒 Answer controls are locked. They will appear after the countdown reaches 0."
+                )
+
+                if st_autorefresh is not None:
+
+                    st_autorefresh(
+                        interval=1000,
+                        limit=11,
+                        key=f"image_memory_timer_{user_id}_{current_round}"
+                    )
+
+                else:
+
+                    st.error(
+                        "Countdown dependency is missing. "
+                        "Install streamlit-autorefresh and restart the app."
+                    )
+
+            # ------------------------------------------------
+            # ANSWER PHASE
+            # ------------------------------------------------
+            else:
+
+                if not st.session_state.image_memory_answer_phase:
+
+                    st.session_state.image_memory_answer_phase = True
+                    st.session_state.image_memory_start_time = None
+                    st.session_state.image_memory_selected = []
+
+                    st.rerun()
+
+                st.markdown(
+                    image_countdown_banner(0),
+                    unsafe_allow_html=True
+                )
+
+                st.success(
+                    "✅ Time is up! The images have disappeared. "
+                    "The answer choices are now active."
+                )
+
+                st.markdown(
+                    f"### 🧠 Select exactly {image_target_count} images you remember"
+                )
+
+                selected_keys = []
+
+                choice_columns = st.columns(4)
+
+                for index, image_key in enumerate(answer_choices):
+
+                    with choice_columns[index % 4]:
+
+                        st.markdown(
+                            render_image_cards(
+                                [image_key],
+                                compact=True
+                            ),
+                            unsafe_allow_html=True
+                        )
+
+                        checked = st.checkbox(
+                            f"Select {IMAGE_GAME_ITEMS[image_key]['label']}",
+                            key=(
+                                f"image_choice_{user_id}_"
+                                f"{current_round}_{image_key}"
+                            )
+                        )
+
+                        if checked:
+                            selected_keys.append(image_key)
+
+                st.session_state.image_memory_selected = selected_keys
+
+                st.markdown(
+                    f"**Selected: {len(selected_keys)} / {image_target_count}**"
+                )
+
+                exit_col, submit_col = st.columns(2)
+
+                with exit_col:
+
+                    if st.button(
+                        "🚪 Exit Image Game",
+                        key=f"image_exit_{current_round}",
+                        use_container_width=True
+                    ):
+
+                        exit_current_game(
+                            "Image Recognition"
+                        )
+
+                with submit_col:
+
+                    if st.button(
+                        "✅ Submit Image Answer",
+                        key=f"image_submit_{current_round}",
+                        type="primary",
+                        use_container_width=True
+                    ):
+
+                        if len(selected_keys) != image_target_count:
+
+                            st.error(
+                                f"Please select exactly {image_target_count} images before submitting."
+                            )
+
+                        else:
+
+                            correct = sum(
+                                image_key in target_images
+                                for image_key in selected_keys
+                            )
+
+                            round_score = (
+                                correct /
+                                image_target_count
+                            ) * 100
+
+                            st.session_state.image_memory_total_score += round_score
+
+                            st.success(
+                                f"Round {current_round}: {correct} of "
+                                f"{image_target_count} images correct "
+                                f"({round_score:.0f}/100)."
+                            )
+
+                            if current_round >= total_rounds:
+
+                                final_score = (
+                                    st.session_state.image_memory_total_score /
+                                    total_rounds
+                                )
+
+                                old_difficulty, new_difficulty, result = (
+                                    update_adaptive_difficulty(
+                                        user_id,
+                                        final_score
+                                    )
+                                )
+
+                                save_image_game_result(
+                                    final_score,
+                                    old_difficulty,
+                                    new_difficulty
+                                )
+
+                                reset_image_memory_game()
+
+                                queue_voice(
+                                    game_result_voice(
+                                        "Image Recognition Game",
+                                        round(final_score, 1),
+                                        old_difficulty,
+                                        new_difficulty,
+                                        language
+                                    ),
+                                    language
+                                )
+
+                                st.rerun()
+
+                            else:
+
+                                next_round = current_round + 1
+
+                                prepare_image_memory_round(
+                                    difficulty,
+                                    next_round
+                                )
+
+                                queue_voice(
+                                    f"Round {current_round} completed. "
+                                    f"Starting image round {next_round} of {total_rounds}. "
+                                    f"You have 10 seconds to remember the images.",
+                                    language
+                                )
+
+                                st.rerun()
 
 
 # ============================================================
