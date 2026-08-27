@@ -30,10 +30,14 @@
 # 24. Multilingual voice output
 # 25. Multilingual voice recognition
 # 26. Multilingual UI
+# 27. Game Exit Option
+# 28. 15-20 Round Cognitive Games
+# 29. Last 5 Games Progress Graph
+# 30. North-East Regional Language Options
 #
 # INSTALL:
 #
-# pip install streamlit gTTS SpeechRecognition streamlit-mic-recorder reportlab
+# pip install streamlit gTTS SpeechRecognition streamlit-mic-recorder reportlab pandas
 #
 # RUN:
 #
@@ -49,6 +53,7 @@ import io
 import re
 import base64
 import textwrap
+import pandas as pd
 
 from datetime import datetime, date, time
 from uuid import uuid4
@@ -1039,6 +1044,34 @@ LANGUAGES = {
     "Turkish": {
         "code": "tr",
         "speech": "tr-TR"
+    },
+
+    # North-East India regional language options.
+    # Bodo, Khasi, Mizo and Meitei use Indian English as a
+    # voice fallback where a dedicated voice is unavailable.
+    "Assamese": {
+        "code": "as",
+        "speech": "as-IN"
+    },
+
+    "Bodo": {
+        "code": "en",
+        "speech": "en-IN"
+    },
+
+    "Khasi": {
+        "code": "en",
+        "speech": "en-IN"
+    },
+
+    "Mizo": {
+        "code": "en",
+        "speech": "en-IN"
+    },
+
+    "Meitei (Manipuri)": {
+        "code": "en",
+        "speech": "en-IN"
     }
 }
 
@@ -1649,7 +1682,14 @@ DEFAULT_SESSION_VALUES = {
 
     "pattern_sequence": None,
 
-    "reaction_target": None
+    "reaction_target": None,
+
+    "memory_round": 0,
+    "memory_total_score": 0.0,
+    "pattern_round": 0,
+    "pattern_total_score": 0.0,
+    "attention_round": 0,
+    "attention_total_score": 0.0
 }
 
 
@@ -3675,6 +3715,69 @@ st.session_state.page = selected_page
 
 
 # ============================================================
+# MULTI-ROUND GAME SETTINGS
+# ============================================================
+
+GAME_ROUNDS_BY_DIFFICULTY = {
+    1: 15,
+    2: 18,
+    3: 20,
+}
+
+
+def reset_memory_game():
+    st.session_state.memory_sequence = None
+    st.session_state.memory_round = 0
+    st.session_state.memory_total_score = 0.0
+
+
+def reset_pattern_game():
+    st.session_state.pattern_sequence = None
+    st.session_state.pattern_round = 0
+    st.session_state.pattern_total_score = 0.0
+
+
+def reset_attention_game():
+    st.session_state.reaction_target = None
+    st.session_state.attention_round = 0
+    st.session_state.attention_total_score = 0.0
+
+
+def exit_current_game(game_name):
+    if game_name == "Memory Sequence":
+        reset_memory_game()
+    elif game_name == "Pattern Memory":
+        reset_pattern_game()
+    elif game_name == "Attention Game":
+        reset_attention_game()
+
+    queue_voice(
+        f"You exited the {game_name}. The unfinished game was not saved.",
+        language
+    )
+    st.rerun()
+
+
+def save_completed_game(game_name, final_score):
+    conn.execute(
+        """
+        INSERT INTO sessions(
+            user_id, game, score, difficulty, created_at
+        )
+        VALUES(?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            game_name,
+            round(float(final_score), 1),
+            difficulty,
+            datetime.now().isoformat(timespec="seconds")
+        )
+    )
+    conn.commit()
+
+
+# ============================================================
 # PATIENT HOME
 # ============================================================
 
@@ -3805,8 +3908,14 @@ elif selected_page == "games":
     )
 
     st.write(
-        f"Adaptive difficulty level: "
-        f"**{difficulty} / 3**"
+        f"Adaptive difficulty level: **{difficulty} / 3**"
+    )
+
+    total_rounds = GAME_ROUNDS_BY_DIFFICULTY[difficulty]
+
+    st.info(
+        f"This game contains {total_rounds} rounds at the current difficulty. "
+        "You can exit an unfinished game at any time."
     )
 
     game_tab1, game_tab2, game_tab3 = st.tabs(
@@ -3823,24 +3932,19 @@ elif selected_page == "games":
 
     with game_tab1:
 
-        st.subheader(
-            "🧠 Memory Sequence"
-        )
+        st.subheader("🧠 Memory Sequence")
 
         sequence_length = {
-
             1: 4,
-
             2: 6,
-
             3: 8
-
         }[difficulty]
 
-        if st.session_state.memory_sequence is None:
+        if st.session_state.memory_round == 0:
 
             st.write(
-                f"Remember {sequence_length} numbers."
+                f"You will play {total_rounds} rounds. "
+                f"Remember {sequence_length} numbers in each round."
             )
 
             if st.button(
@@ -3849,18 +3953,16 @@ elif selected_page == "games":
                 key="memory_start"
             ):
 
-                st.session_state.memory_sequence = (
-                    random.sample(
-                        range(1, 10),
-                        sequence_length
-                    )
+                st.session_state.memory_round = 1
+                st.session_state.memory_total_score = 0.0
+                st.session_state.memory_sequence = random.sample(
+                    range(1, 10),
+                    sequence_length
                 )
 
                 queue_voice(
-                    (
-                        f"Memory game started. "
-                        f"Remember {sequence_length} numbers."
-                    ),
+                    f"Memory game started. Round 1 of {total_rounds}. "
+                    f"Remember {sequence_length} numbers.",
                     language
                 )
 
@@ -3868,13 +3970,15 @@ elif selected_page == "games":
 
         else:
 
-            sequence = (
-                st.session_state.memory_sequence
+            current_round = st.session_state.memory_round
+            sequence = st.session_state.memory_sequence
+
+            st.progress(
+                current_round / total_rounds,
+                text=f"Round {current_round} of {total_rounds}"
             )
 
-            st.success(
-                "Remember this sequence:"
-            )
+            st.success("Remember this sequence:")
 
             st.markdown(
                 "## " +
@@ -3886,124 +3990,113 @@ elif selected_page == "games":
 
             answer = st.text_input(
                 "Enter the numbers in the same order",
-                key="memory_answer"
+                key=f"memory_answer_{current_round}"
             )
 
-            if st.button(
-                "Submit Memory Answer",
-                key="memory_submit"
-            ):
+            exit_col, submit_col = st.columns(2)
 
-                try:
+            with exit_col:
 
-                    user_answer = [
+                if st.button(
+                    "🚪 Exit Game",
+                    key=f"memory_exit_{current_round}",
+                    use_container_width=True
+                ):
+                    exit_current_game("Memory Sequence")
 
-                        int(x)
+            with submit_col:
 
-                        for x in re.split(
-                            r"[,\s]+",
-                            answer.strip()
-                        )
+                if st.button(
+                    "Submit Round",
+                    key=f"memory_submit_{current_round}",
+                    type="primary",
+                    use_container_width=True
+                ):
 
-                        if x
+                    try:
 
-                    ]
-
-                    if len(user_answer) != len(sequence):
-
-                        queue_voice(
-                            (
-                                f"Please enter exactly "
-                                f"{len(sequence)} numbers."
-                            ),
-                            language
-                        )
-
-                        st.error(
-                            f"Enter exactly "
-                            f"{len(sequence)} numbers."
-                        )
-
-                    else:
-
-                        correct = sum(
-                            a == b
-                            for a, b in zip(
-                                sequence,
-                                user_answer
+                        user_answer = [
+                            int(x)
+                            for x in re.split(
+                                r"[,\s]+",
+                                answer.strip()
                             )
-                        )
+                            if x
+                        ]
 
-                        score = round(
-                            (
-                                correct /
-                                len(sequence)
-                            ) * 100,
-                            1
-                        )
+                        if len(user_answer) != len(sequence):
 
-                        conn.execute(
-                            """
-                            INSERT INTO sessions(
-                                user_id,
-                                game,
-                                score,
-                                difficulty,
-                                created_at
+                            st.error(
+                                f"Enter exactly {len(sequence)} numbers."
                             )
-                            VALUES(
-                                ?,
-                                ?,
-                                ?,
-                                ?,
-                                ?
-                            )
-                            """,
-                            (
-                                user_id,
-                                "Memory Sequence",
-                                score,
-                                difficulty,
-                                datetime.now().isoformat(
-                                    timespec="seconds"
+
+                        else:
+
+                            correct = sum(
+                                a == b
+                                for a, b in zip(
+                                    sequence,
+                                    user_answer
                                 )
                             )
+
+                            round_score = (
+                                correct /
+                                len(sequence)
+                            ) * 100
+
+                            st.session_state.memory_total_score += round_score
+
+                            if current_round >= total_rounds:
+
+                                final_score = (
+                                    st.session_state.memory_total_score /
+                                    total_rounds
+                                )
+
+                                save_completed_game(
+                                    "Memory Sequence",
+                                    final_score
+                                )
+
+                                old_difficulty, new_difficulty, result = (
+                                    update_adaptive_difficulty(
+                                        user_id,
+                                        final_score
+                                    )
+                                )
+
+                                reset_memory_game()
+
+                                queue_voice(
+                                    game_result_voice(
+                                        "Memory Game",
+                                        round(final_score, 1),
+                                        old_difficulty,
+                                        new_difficulty,
+                                        language
+                                    ),
+                                    language
+                                )
+
+                                st.rerun()
+
+                            else:
+
+                                next_round = current_round + 1
+                                st.session_state.memory_round = next_round
+                                st.session_state.memory_sequence = random.sample(
+                                    range(1, 10),
+                                    sequence_length
+                                )
+
+                                st.rerun()
+
+                    except ValueError:
+
+                        st.error(
+                            "Please enter numbers only."
                         )
-
-                        conn.commit()
-
-                        old_difficulty, new_difficulty, result = (
-                            update_adaptive_difficulty(
-                                user_id,
-                                score
-                            )
-                        )
-
-                        st.session_state.memory_sequence = None
-
-                        queue_voice(
-                            game_result_voice(
-                                "Memory Game",
-                                score,
-                                old_difficulty,
-                                new_difficulty,
-                                language
-                            ),
-                            language
-                        )
-
-                        st.rerun()
-
-                except ValueError:
-
-                    queue_voice(
-                        "Please enter numbers only.",
-                        language
-                    )
-
-                    st.error(
-                        "Please enter numbers only."
-                    )
 
     # ========================================================
     # PATTERN MEMORY
@@ -4011,36 +4104,26 @@ elif selected_page == "games":
 
     with game_tab2:
 
-        st.subheader(
-            "🔷 Pattern Memory"
-        )
+        st.subheader("🔷 Pattern Memory")
 
         pattern_length = {
-
             1: 4,
-
             2: 6,
-
             3: 8
-
         }[difficulty]
 
         symbols = [
-
             "▲",
-
             "●",
-
             "■",
-
             "◆"
-
         ]
 
-        if st.session_state.pattern_sequence is None:
+        if st.session_state.pattern_round == 0:
 
             st.write(
-                f"Remember {pattern_length} symbols."
+                f"You will play {total_rounds} rounds. "
+                f"Remember {pattern_length} symbols in each round."
             )
 
             if st.button(
@@ -4049,21 +4132,16 @@ elif selected_page == "games":
                 key="pattern_start"
             ):
 
+                st.session_state.pattern_round = 1
+                st.session_state.pattern_total_score = 0.0
                 st.session_state.pattern_sequence = [
-
                     random.choice(symbols)
-
-                    for _ in range(
-                        pattern_length
-                    )
-
+                    for _ in range(pattern_length)
                 ]
 
                 queue_voice(
-                    (
-                        f"Pattern game started. "
-                        f"Remember {pattern_length} symbols."
-                    ),
+                    f"Pattern game started. Round 1 of {total_rounds}. "
+                    f"Remember {pattern_length} symbols.",
                     language
                 )
 
@@ -4071,13 +4149,15 @@ elif selected_page == "games":
 
         else:
 
-            pattern = (
-                st.session_state.pattern_sequence
+            current_round = st.session_state.pattern_round
+            pattern = st.session_state.pattern_sequence
+
+            st.progress(
+                current_round / total_rounds,
+                text=f"Round {current_round} of {total_rounds}"
             )
 
-            st.success(
-                "Remember this pattern:"
-            )
+            st.success("Remember this pattern:")
 
             st.markdown(
                 "## " +
@@ -4087,104 +4167,102 @@ elif selected_page == "games":
             pattern_answer = st.text_input(
                 "Enter the pattern using symbols",
                 placeholder="Example: ▲ ● ■ ◆",
-                key="pattern_answer"
+                key=f"pattern_answer_{current_round}"
             )
 
-            if st.button(
-                "Submit Pattern Answer",
-                key="pattern_submit"
-            ):
+            exit_col, submit_col = st.columns(2)
 
-                answer_symbols = (
-                    pattern_answer
-                    .strip()
-                    .split()
-                )
+            with exit_col:
 
-                if len(answer_symbols) != len(pattern):
+                if st.button(
+                    "🚪 Exit Game",
+                    key=f"pattern_exit_{current_round}",
+                    use_container_width=True
+                ):
+                    exit_current_game("Pattern Memory")
 
-                    queue_voice(
-                        (
-                            f"Please enter exactly "
-                            f"{len(pattern)} symbols."
-                        ),
-                        language
+            with submit_col:
+
+                if st.button(
+                    "Submit Round",
+                    key=f"pattern_submit_{current_round}",
+                    type="primary",
+                    use_container_width=True
+                ):
+
+                    answer_symbols = (
+                        pattern_answer
+                        .strip()
+                        .split()
                     )
 
-                    st.error(
-                        f"Enter exactly "
-                        f"{len(pattern)} symbols."
-                    )
+                    if len(answer_symbols) != len(pattern):
 
-                else:
-
-                    correct = sum(
-                        a == b
-                        for a, b in zip(
-                            pattern,
-                            answer_symbols
+                        st.error(
+                            f"Enter exactly {len(pattern)} symbols."
                         )
-                    )
 
-                    score = round(
-                        (
-                            correct /
-                            len(pattern)
-                        ) * 100,
-                        1
-                    )
+                    else:
 
-                    conn.execute(
-                        """
-                        INSERT INTO sessions(
-                            user_id,
-                            game,
-                            score,
-                            difficulty,
-                            created_at
-                        )
-                        VALUES(
-                            ?,
-                            ?,
-                            ?,
-                            ?,
-                            ?
-                        )
-                        """,
-                        (
-                            user_id,
-                            "Pattern Memory",
-                            score,
-                            difficulty,
-                            datetime.now().isoformat(
-                                timespec="seconds"
+                        correct = sum(
+                            a == b
+                            for a, b in zip(
+                                pattern,
+                                answer_symbols
                             )
                         )
-                    )
 
-                    conn.commit()
+                        round_score = (
+                            correct /
+                            len(pattern)
+                        ) * 100
 
-                    old_difficulty, new_difficulty, result = (
-                        update_adaptive_difficulty(
-                            user_id,
-                            score
-                        )
-                    )
+                        st.session_state.pattern_total_score += round_score
 
-                    st.session_state.pattern_sequence = None
+                        if current_round >= total_rounds:
 
-                    queue_voice(
-                        game_result_voice(
-                            "Pattern Memory Game",
-                            score,
-                            old_difficulty,
-                            new_difficulty,
-                            language
-                        ),
-                        language
-                    )
+                            final_score = (
+                                st.session_state.pattern_total_score /
+                                total_rounds
+                            )
 
-                    st.rerun()
+                            save_completed_game(
+                                "Pattern Memory",
+                                final_score
+                            )
+
+                            old_difficulty, new_difficulty, result = (
+                                update_adaptive_difficulty(
+                                    user_id,
+                                    final_score
+                                )
+                            )
+
+                            reset_pattern_game()
+
+                            queue_voice(
+                                game_result_voice(
+                                    "Pattern Memory Game",
+                                    round(final_score, 1),
+                                    old_difficulty,
+                                    new_difficulty,
+                                    language
+                                ),
+                                language
+                            )
+
+                            st.rerun()
+
+                        else:
+
+                            next_round = current_round + 1
+                            st.session_state.pattern_round = next_round
+                            st.session_state.pattern_sequence = [
+                                random.choice(symbols)
+                                for _ in range(pattern_length)
+                            ]
+
+                            st.rerun()
 
     # ========================================================
     # ATTENTION GAME
@@ -4192,15 +4270,18 @@ elif selected_page == "games":
 
     with game_tab3:
 
-        st.subheader(
-            "⚡ Attention Game"
-        )
+        st.subheader("⚡ Attention Game")
 
         st.write(
             "Click the target number."
         )
 
-        if st.session_state.reaction_target is None:
+        if st.session_state.attention_round == 0:
+
+            st.write(
+                f"You will play {total_rounds} rounds. "
+                "Find the target number in each round."
+            )
 
             if st.button(
                 "▶️ Start Attention Game",
@@ -4208,15 +4289,12 @@ elif selected_page == "games":
                 key="attention_start"
             ):
 
-                st.session_state.reaction_target = (
-                    random.randint(
-                        1,
-                        9
-                    )
-                )
+                st.session_state.attention_round = 1
+                st.session_state.attention_total_score = 0.0
+                st.session_state.reaction_target = random.randint(1, 9)
 
                 queue_voice(
-                    "Attention game started. "
+                    f"Attention game started. Round 1 of {total_rounds}. "
                     "Find the target number.",
                     language
                 )
@@ -4225,92 +4303,86 @@ elif selected_page == "games":
 
         else:
 
-            target = (
-                st.session_state.reaction_target
+            current_round = st.session_state.attention_round
+            target = st.session_state.reaction_target
+
+            st.progress(
+                current_round / total_rounds,
+                text=f"Round {current_round} of {total_rounds}"
             )
 
             st.markdown(
                 f"## Find: **{target}**"
             )
 
+            if st.button(
+                "🚪 Exit Game",
+                key=f"attention_exit_{current_round}",
+                use_container_width=True
+            ):
+                exit_current_game("Attention Game")
+
             cols = st.columns(3)
-
-            numbers = list(
-                range(1, 10)
-            )
-
+            numbers = list(range(1, 10))
             random.shuffle(numbers)
 
-            for index, number in enumerate(
-                numbers
-            ):
+            for index, number in enumerate(numbers):
 
                 with cols[index % 3]:
 
                     if st.button(
                         str(number),
-                        key=f"attention_{number}"
+                        key=f"attention_{current_round}_{number}"
                     ):
 
-                        if number == target:
+                        round_score = (
+                            100
+                            if number == target
+                            else 0
+                        )
 
-                            score = 100
+                        st.session_state.attention_total_score += round_score
+
+                        if current_round >= total_rounds:
+
+                            final_score = (
+                                st.session_state.attention_total_score /
+                                total_rounds
+                            )
+
+                            save_completed_game(
+                                "Attention Game",
+                                final_score
+                            )
+
+                            old_difficulty, new_difficulty, result = (
+                                update_adaptive_difficulty(
+                                    user_id,
+                                    final_score
+                                )
+                            )
+
+                            reset_attention_game()
+
+                            queue_voice(
+                                game_result_voice(
+                                    "Attention Game",
+                                    round(final_score, 1),
+                                    old_difficulty,
+                                    new_difficulty,
+                                    language
+                                ),
+                                language
+                            )
+
+                            st.rerun()
 
                         else:
 
-                            score = 0
+                            st.session_state.attention_round = current_round + 1
+                            st.session_state.reaction_target = random.randint(1, 9)
 
-                        conn.execute(
-                            """
-                            INSERT INTO sessions(
-                                user_id,
-                                game,
-                                score,
-                                difficulty,
-                                created_at
-                            )
-                            VALUES(
-                                ?,
-                                ?,
-                                ?,
-                                ?,
-                                ?
-                            )
-                            """,
-                            (
-                                user_id,
-                                "Attention Game",
-                                score,
-                                difficulty,
-                                datetime.now().isoformat(
-                                    timespec="seconds"
-                                )
-                            )
-                        )
-
-                        conn.commit()
-
-                        old_difficulty, new_difficulty, result = (
-                            update_adaptive_difficulty(
-                                user_id,
-                                score
-                            )
-                        )
-
-                        st.session_state.reaction_target = None
-
-                        queue_voice(
-                            game_result_voice(
-                                "Attention Game",
-                                score,
-                                old_difficulty,
-                                new_difficulty,
-                                language
-                            ),
-                            language
-                        )
-
-                        st.rerun()
+                            st.rerun()
 
 
 # ============================================================
@@ -4536,9 +4608,7 @@ elif selected_page == "history":
         WHERE user_id=?
         ORDER BY id DESC
         """,
-        (
-            user_id,
-        )
+        (user_id,)
     ).fetchall()
 
     if not sessions:
@@ -4573,6 +4643,36 @@ elif selected_page == "history":
             "Current Difficulty",
             difficulty
         )
+
+        st.subheader(
+            "📈 Last 5 Games Progress"
+        )
+
+        last_five = sessions[:5][::-1]
+
+        graph_df = pd.DataFrame(
+            [
+                {
+                    "Game": f"{index}. {row[0]}",
+                    "Score": float(row[1])
+                }
+                for index, row in enumerate(last_five, start=1)
+            ]
+        )
+
+        if not graph_df.empty:
+
+            st.line_chart(
+                graph_df.set_index("Game"),
+                y="Score",
+                use_container_width=True
+            )
+
+            st.caption(
+                "The graph shows the five most recently completed games, "
+                "with the oldest of those five first. Scores are final "
+                "scores saved for each completed multi-round game."
+            )
 
         st.dataframe(
             [
