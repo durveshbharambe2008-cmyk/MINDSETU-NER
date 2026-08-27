@@ -34,6 +34,13 @@
 # 28. 15-20 Round Cognitive Games
 # 29. Last 5 Games Progress Graph
 # 30. North-East Regional Language Options
+# 31. Doctor Registration + Qualification Verification
+# 32. Caretaker Registration
+# 33. Phone / Email / Location for providers and patients
+# 34. Provider-driven Add Patient onboarding
+# 35. Automatic patient -> doctor/caretaker linking
+# 36. Provider-owned patient privacy
+# 37. Admin management / verification instead of central patient assignment
 #
 # INSTALL:
 #
@@ -536,7 +543,7 @@ def build_patient_progress_pdf(patient_id):
         [Paragraph("<b>Patient Name:</b>", styles["BodySmall"]), safe_pdf_text(patient[1]), Paragraph("<b>Username:</b>", styles["BodySmall"]), safe_pdf_text(patient[2])],
         [Paragraph("<b>Role:</b>", styles["BodySmall"]), safe_pdf_text(patient[5].title()), Paragraph("<b>Language:</b>", styles["BodySmall"]), safe_pdf_text(patient[3])],
         [Paragraph("<b>Personal Baseline:</b>", styles["BodySmall"]), f"{float(patient[4] or 0):.1f}", Paragraph("<b>Adaptive Difficulty:</b>", styles["BodySmall"]), str(int(patient[7] or 1))],
-        [Paragraph("<b>Assigned Doctor:</b>", styles["BodySmall"]), safe_pdf_text(doctor_name), Paragraph("<b>Clinical Fields:</b>", styles["BodySmall"]), "Not provided by this app"],
+        [Paragraph("<b>Assigned Provider:</b>", styles["BodySmall"]), safe_pdf_text(doctor_name), Paragraph("<b>Clinical Fields:</b>", styles["BodySmall"]), "Provider-managed onboarding"],
     ]
     profile_table = Table(profile_data, colWidths=[36 * mm, 52 * mm, 38 * mm, 49 * mm])
     profile_table.setStyle(TableStyle([
@@ -849,6 +856,11 @@ def get_connection():
         check_same_thread=False
     )
 
+    connection.execute("PRAGMA foreign_keys = ON")
+
+    # --------------------------------------------------------
+    # KEEP ORIGINAL USERS TABLE + ADD PROVIDER ONBOARDING FIELDS
+    # --------------------------------------------------------
     connection.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -859,7 +871,18 @@ def get_connection():
             baseline REAL DEFAULT 0,
             role TEXT DEFAULT 'patient',
             doctor_id INTEGER,
-            adaptive_difficulty INTEGER DEFAULT 1
+            adaptive_difficulty INTEGER DEFAULT 1,
+            caretaker_id INTEGER,
+            phone TEXT DEFAULT '',
+            email TEXT DEFAULT '',
+            location TEXT DEFAULT '',
+            qualification TEXT DEFAULT '',
+            qualification_number TEXT DEFAULT '',
+            qualification_document TEXT DEFAULT '',
+            qualification_status TEXT DEFAULT 'Not Required',
+            account_status TEXT DEFAULT 'Active',
+            created_by_id INTEGER,
+            created_at TEXT DEFAULT ''
         )
     """)
 
@@ -897,25 +920,54 @@ def get_connection():
     """)
 
     # --------------------------------------------------------
-    # DATABASE MIGRATION FOR OLD DATABASES
+    # SAFE MIGRATION FOR EXISTING DATABASES
     # --------------------------------------------------------
+    existing_columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(users)"
+        ).fetchall()
+    }
 
-    columns = connection.execute(
-        "PRAGMA table_info(users)"
-    ).fetchall()
+    required_columns = {
+        "adaptive_difficulty": "INTEGER DEFAULT 1",
+        "caretaker_id": "INTEGER",
+        "phone": "TEXT DEFAULT ''",
+        "email": "TEXT DEFAULT ''",
+        "location": "TEXT DEFAULT ''",
+        "qualification": "TEXT DEFAULT ''",
+        "qualification_number": "TEXT DEFAULT ''",
+        "qualification_document": "TEXT DEFAULT ''",
+        "qualification_status": "TEXT DEFAULT 'Not Required'",
+        "account_status": "TEXT DEFAULT 'Active'",
+        "created_by_id": "INTEGER",
+        "created_at": "TEXT DEFAULT ''",
+    }
 
-    column_names = [
-        column[1]
-        for column in columns
-    ]
+    for column_name, column_definition in required_columns.items():
+        if column_name not in existing_columns:
+            connection.execute(
+                f"ALTER TABLE users ADD COLUMN {column_name} {column_definition}"
+            )
 
-    if "adaptive_difficulty" not in column_names:
+    # Older patient accounts should remain usable.
+    connection.execute("""
+        UPDATE users
+        SET account_status='Active'
+        WHERE account_status IS NULL OR TRIM(account_status)=''
+    """)
 
-        connection.execute("""
-            ALTER TABLE users
-            ADD COLUMN adaptive_difficulty
-            INTEGER DEFAULT 1
-        """)
+    connection.execute("""
+        UPDATE users
+        SET qualification_status='Not Required'
+        WHERE qualification_status IS NULL OR TRIM(qualification_status)=''
+    """)
+
+    connection.execute("""
+        UPDATE users
+        SET created_at=datetime('now')
+        WHERE created_at IS NULL OR TRIM(created_at)=''
+    """)
 
     connection.commit()
 
@@ -924,6 +976,68 @@ def get_connection():
 
 conn = get_connection()
 
+
+# ============================================================
+# PROVIDER / PATIENT SECURITY HELPERS
+# ============================================================
+
+def email_is_valid(email):
+    if not email:
+        return False
+    return re.match(
+        r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$",
+        email.strip()
+    ) is not None
+
+
+def phone_is_valid(phone):
+    if not phone:
+        return False
+    digits = re.sub(r"\D", "", phone)
+    return 10 <= len(digits) <= 15
+
+
+def normalize_location(location):
+    return " ".join((location or "").strip().split())
+
+
+def provider_can_manage_patient(provider_id, provider_role, patient_id):
+    """Server-side ownership check for patient privacy."""
+    if provider_role == "doctor":
+        row = conn.execute(
+            """
+            SELECT id
+            FROM users
+            WHERE id=?
+            AND role='patient'
+            AND doctor_id=?
+            """,
+            (patient_id, provider_id)
+        ).fetchone()
+        return row is not None
+
+    if provider_role == "caretaker":
+        row = conn.execute(
+            """
+            SELECT id
+            FROM users
+            WHERE id=?
+            AND role='patient'
+            AND caretaker_id=?
+            """,
+            (patient_id, provider_id)
+        ).fetchone()
+        return row is not None
+
+    return False
+
+
+def provider_display_name(provider_row):
+    if not provider_row:
+        return "Not assigned"
+    role = provider_row[1]
+    prefix = "Dr. " if role == "doctor" else "Caretaker: "
+    return prefix + provider_row[0]
 
 # ============================================================
 # LANGUAGE SETTINGS
@@ -1593,66 +1707,6 @@ def parse_time_from_command(command):
 
 
 # ============================================================
-# REMINDER CATEGORY HELPERS
-# ============================================================
-
-REMINDER_CATEGORIES = {
-    "💊 Medicine": "Medicine",
-    "💧 Hydration": "Hydration",
-    "🏃 Daily Activity": "Daily Activity",
-    "🩺 Medical Appointment": "Medical Appointment",
-    "🔔 General Reminder": "General Reminder",
-}
-
-
-def detect_reminder_category(command):
-    """Automatically detect a reminder category from a voice command."""
-    command = (command or "").lower()
-
-    medicine_words = [
-        "medicine", "medication", "tablet", "pill", "capsule",
-        "दवा", "गोली", "औषध", "औषधि", "औषधं",
-        "অসমীয়া ঔষধ", "ঔষধ", "ওষুধ",
-    ]
-    hydration_words = [
-        "water", "drink water", "hydration", "hydrate",
-        "পানি", "জল", "पाणी", "जल",
-    ]
-    activity_words = [
-        "daily activity", "walk", "walking", "exercise",
-        "activity", "stretch", "workout",
-        "দৈনিক কাৰ্যকলাপ", "হাঁটা", "চলাফেরা",
-    ]
-    appointment_words = [
-        "medical appointment", "doctor appointment", "appointment",
-        "doctor visit", "clinic", "hospital",
-        "डॉक्टर की अपॉइंटमेंट", "भेट", "अपॉइंटमेंट",
-    ]
-
-    if any(word in command for word in medicine_words):
-        return "Medicine"
-    if any(word in command for word in hydration_words):
-        return "Hydration"
-    if any(word in command for word in activity_words):
-        return "Daily Activity"
-    if any(word in command for word in appointment_words):
-        return "Medical Appointment"
-
-    return "General Reminder"
-
-
-def reminder_prefix(category):
-    prefixes = {
-        "Medicine": "💊 Medicine",
-        "Hydration": "💧 Hydration",
-        "Daily Activity": "🏃 Daily Activity",
-        "Medical Appointment": "🩺 Medical Appointment",
-        "General Reminder": "🔔 General Reminder",
-    }
-    return prefixes.get(category, "🔔 General Reminder")
-
-
-# ============================================================
 # REMINDER TITLE FROM VOICE COMMAND
 # ============================================================
 
@@ -1730,6 +1784,10 @@ DEFAULT_SESSION_VALUES = {
 
     "doctor_id": None,
 
+    "caretaker_id": None,
+
+    "provider_role": None,
+
     "page": "home",
 
     "welcome_pending": False,
@@ -1777,17 +1835,18 @@ if not st.session_state.logged_in:
 
     # Login / registration starts directly here.
 
-
     st.info(
         "MINDSETU NER is a prototype for "
         "cognitive wellness and performance tracking. "
         "It is not a medical diagnostic system."
     )
 
-    login_tab, signup_tab = st.tabs(
+    login_tab, signup_tab, doctor_signup_tab, caretaker_signup_tab = st.tabs(
         [
             "🔐 Login",
-            "📝 Patient Registration"
+            "📝 Patient Registration",
+            "🩺 Doctor Registration",
+            "🤝 Caretaker Registration"
         ]
     )
 
@@ -1816,9 +1875,7 @@ if not st.session_state.logged_in:
             use_container_width=True
         ):
 
-            username_clean = (
-                username.strip()
-            )
+            username_clean = username.strip()
 
             # ------------------------------------------------
             # ADMIN
@@ -1833,6 +1890,7 @@ if not st.session_state.logged_in:
                     st.session_state.name = "Administrator"
                     st.session_state.username = "admin"
                     st.session_state.role = "admin"
+                    st.session_state.provider_role = None
                     st.session_state.language = "English"
                     st.session_state.page = "home"
 
@@ -1866,13 +1924,18 @@ if not st.session_state.logged_in:
                         language,
                         role,
                         doctor_id,
-                        adaptive_difficulty
+                        adaptive_difficulty,
+                        caretaker_id,
+                        phone,
+                        email,
+                        location,
+                        qualification,
+                        qualification_status,
+                        account_status
                     FROM users
                     WHERE LOWER(username)=LOWER(?)
                     """,
-                    (
-                        username_clean,
-                    )
+                    (username_clean,)
                 ).fetchone()
 
                 if user is None:
@@ -1881,14 +1944,30 @@ if not st.session_state.logged_in:
                         "Username not found."
                     )
 
-                elif (
-                    hash_password(password)
-                    != user[3]
-                ):
+                elif hash_password(password) != user[3]:
 
                     st.error(
                         "Incorrect password."
                     )
+
+                elif user[14] != "Active":
+
+                    status_message = {
+                        "Pending Verification": (
+                            "Your account is waiting for administrator verification."
+                        ),
+                        "Rejected": (
+                            "Your account was not approved. Please contact the administrator."
+                        ),
+                        "Inactive": (
+                            "Your account is currently inactive. Please contact the administrator."
+                        ),
+                    }.get(
+                        user[14],
+                        "Your account is not active. Please contact the administrator."
+                    )
+
+                    st.error(status_message)
 
                 else:
 
@@ -1899,15 +1978,13 @@ if not st.session_state.logged_in:
                     st.session_state.language = user[4]
                     st.session_state.role = user[5]
                     st.session_state.doctor_id = user[6]
-                    st.session_state.page = "home"
-
-                    queue_voice(
-                        (
-                            f"Welcome {user[1]}. "
-                            "You have logged in successfully."
-                        ),
-                        user[4]
+                    st.session_state.caretaker_id = user[8]
+                    st.session_state.provider_role = (
+                        user[5]
+                        if user[5] in ("doctor", "caretaker")
+                        else None
                     )
+                    st.session_state.page = "home"
 
                     if user[5] == "patient":
 
@@ -1928,8 +2005,20 @@ if not st.session_state.logged_in:
                             (
                                 f"Welcome Dr. {user[1]}. "
                                 "You have logged in successfully. "
-                                "You can review your assigned patients "
-                                "and manage their reports."
+                                "You can manage your own patients "
+                                "and review their performance."
+                            ),
+                            user[4]
+                        )
+
+                    elif user[5] == "caretaker":
+
+                        queue_voice(
+                            (
+                                f"Welcome {user[1]}. "
+                                "You have logged in successfully. "
+                                "You can manage your own linked patients "
+                                "and review their progress."
                             ),
                             user[4]
                         )
@@ -1937,7 +2026,7 @@ if not st.session_state.logged_in:
                     st.rerun()
 
     # ========================================================
-    # REGISTRATION
+    # PATIENT REGISTRATION - ORIGINAL FLOW KEPT
     # ========================================================
 
     with signup_tab:
@@ -1968,6 +2057,21 @@ if not st.session_state.logged_in:
             key="reg_confirm"
         )
 
+        reg_phone = st.text_input(
+            "Phone Number (optional)",
+            key="reg_phone"
+        )
+
+        reg_email = st.text_input(
+            "Email ID (optional)",
+            key="reg_email"
+        )
+
+        reg_location = st.text_input(
+            "Location (optional)",
+            key="reg_location"
+        )
+
         reg_language = st.selectbox(
             "Select Language",
             list(LANGUAGES.keys()),
@@ -1982,28 +2086,27 @@ if not st.session_state.logged_in:
 
             if not reg_name.strip():
 
-                st.error(
-                    "Please enter your name."
-                )
+                st.error("Please enter your name.")
 
             elif not reg_username.strip():
 
-                st.error(
-                    "Please enter a username."
-                )
+                st.error("Please enter a username.")
 
             elif len(reg_password) < 6:
 
-                st.error(
-                    "Password must contain at least "
-                    "6 characters."
-                )
+                st.error("Password must contain at least 6 characters.")
 
             elif reg_password != reg_confirm:
 
-                st.error(
-                    "Passwords do not match."
-                )
+                st.error("Passwords do not match.")
+
+            elif reg_phone.strip() and not phone_is_valid(reg_phone):
+
+                st.error("Please enter a valid phone number.")
+
+            elif reg_email.strip() and not email_is_valid(reg_email):
+
+                st.error("Please enter a valid email address.")
 
             else:
 
@@ -2013,16 +2116,12 @@ if not st.session_state.logged_in:
                     FROM users
                     WHERE LOWER(username)=LOWER(?)
                     """,
-                    (
-                        reg_username.strip(),
-                    )
+                    (reg_username.strip(),)
                 ).fetchone()
 
                 if existing:
 
-                    st.error(
-                        "Username already exists."
-                    )
+                    st.error("Username already exists.")
 
                 else:
 
@@ -2035,25 +2134,26 @@ if not st.session_state.logged_in:
                             language,
                             baseline,
                             role,
-                            adaptive_difficulty
+                            adaptive_difficulty,
+                            phone,
+                            email,
+                            location,
+                            account_status,
+                            created_at
                         )
                         VALUES(
-                            ?,
-                            ?,
-                            ?,
-                            ?,
-                            0,
-                            'patient',
-                            1
+                            ?, ?, ?, ?, 0, 'patient', 1, ?, ?, ?, 'Active', ?
                         )
                         """,
                         (
                             reg_name.strip(),
                             reg_username.strip(),
-                            hash_password(
-                                reg_password
-                            ),
-                            reg_language
+                            hash_password(reg_password),
+                            reg_language,
+                            reg_phone.strip(),
+                            reg_email.strip(),
+                            normalize_location(reg_location),
+                            datetime.now().isoformat(timespec="seconds")
                         )
                     )
 
@@ -2066,14 +2166,220 @@ if not st.session_state.logged_in:
                     queue_voice(
                         (
                             f"Welcome {reg_name.strip()}. "
-                            "Your patient account has been "
-                            "created successfully."
+                            "Your patient account has been created successfully."
                         ),
                         reg_language
                     )
 
-                    # Play the queued registration voice.
                     play_pending_voice()
+
+    # ========================================================
+    # DOCTOR REGISTRATION
+    # ========================================================
+
+    with doctor_signup_tab:
+
+        st.subheader("🩺 Doctor Registration")
+        st.info(
+            "Doctor registrations require qualification details. "
+            "The account remains pending until the administrator verifies the submitted qualification."
+        )
+
+        doc_name = st.text_input("Full Name", key="doctor_reg_name")
+        doc_username = st.text_input("Username", key="doctor_reg_username")
+        doc_password = st.text_input("Password", type="password", key="doctor_reg_password")
+        doc_confirm = st.text_input("Confirm Password", type="password", key="doctor_reg_confirm")
+        doc_phone = st.text_input("Phone Number", key="doctor_reg_phone")
+        doc_email = st.text_input("Email ID", key="doctor_reg_email")
+        doc_location = st.text_input("Location / Clinic Location", key="doctor_reg_location")
+        doc_qualification = st.text_input(
+            "Degree / Qualification",
+            placeholder="Example: MBBS, MD, BDS, etc.",
+            key="doctor_reg_qualification"
+        )
+        doc_qualification_number = st.text_input(
+            "Medical Registration / Qualification Number",
+            key="doctor_reg_qualification_number"
+        )
+        doc_document = st.file_uploader(
+            "Upload Degree / Qualification Document",
+            type=["pdf", "png", "jpg", "jpeg"],
+            key="doctor_reg_document"
+        )
+        doc_language = st.selectbox(
+            "Preferred Language",
+            list(LANGUAGES.keys()),
+            key="doctor_reg_language"
+        )
+
+        if st.button(
+            "🩺 Submit Doctor Registration",
+            type="primary",
+            use_container_width=True
+        ):
+
+            if not doc_name.strip():
+                st.error("Please enter the doctor's name.")
+            elif not doc_username.strip():
+                st.error("Please enter a username.")
+            elif len(doc_password) < 6:
+                st.error("Password must contain at least 6 characters.")
+            elif doc_password != doc_confirm:
+                st.error("Passwords do not match.")
+            elif not phone_is_valid(doc_phone):
+                st.error("Please enter a valid phone number.")
+            elif not email_is_valid(doc_email):
+                st.error("Please enter a valid email address.")
+            elif not normalize_location(doc_location):
+                st.error("Please enter the doctor's location.")
+            elif not doc_qualification.strip():
+                st.error("Please enter a degree or qualification.")
+            elif not doc_qualification_number.strip():
+                st.error("Please enter the medical registration/qualification number.")
+            elif doc_document is None:
+                st.error("Please upload the degree/qualification document.")
+            else:
+
+                existing = conn.execute(
+                    "SELECT id FROM users WHERE LOWER(username)=LOWER(?)",
+                    (doc_username.strip(),)
+                ).fetchone()
+
+                if existing:
+                    st.error("Username already exists.")
+                else:
+
+                    conn.execute(
+                        """
+                        INSERT INTO users(
+                            name, username, password_hash, language, baseline,
+                            role, adaptive_difficulty, phone, email, location,
+                            qualification, qualification_number, qualification_document,
+                            qualification_status, account_status, created_at
+                        )
+                        VALUES(
+                            ?, ?, ?, ?, 0, 'doctor', 1, ?, ?, ?, ?, ?, ?,
+                            'Pending', 'Pending Verification', ?
+                        )
+                        """,
+                        (
+                            doc_name.strip(),
+                            doc_username.strip(),
+                            hash_password(doc_password),
+                            doc_language,
+                            doc_phone.strip(),
+                            doc_email.strip(),
+                            normalize_location(doc_location),
+                            doc_qualification.strip(),
+                            doc_qualification_number.strip(),
+                            doc_document.name,
+                            datetime.now().isoformat(timespec="seconds")
+                        )
+                    )
+                    conn.commit()
+
+                    st.success(
+                        "Doctor registration submitted. Please wait for administrator verification."
+                    )
+                    announce(
+                        "Doctor registration submitted successfully and is waiting for administrator verification.",
+                        doc_language
+                    )
+
+    # ========================================================
+    # CARETAKER REGISTRATION
+    # ========================================================
+
+    with caretaker_signup_tab:
+
+        st.subheader("🤝 Caretaker Registration")
+        st.info(
+            "Caretakers can create accounts and later add their own patients directly from their portal."
+        )
+
+        care_name = st.text_input("Full Name", key="caretaker_reg_name")
+        care_username = st.text_input("Username", key="caretaker_reg_username")
+        care_password = st.text_input("Password", type="password", key="caretaker_reg_password")
+        care_confirm = st.text_input("Confirm Password", type="password", key="caretaker_reg_confirm")
+        care_phone = st.text_input("Phone Number", key="caretaker_reg_phone")
+        care_email = st.text_input("Email ID", key="caretaker_reg_email")
+        care_location = st.text_input("Location", key="caretaker_reg_location")
+        care_relationship = st.text_input(
+            "Relationship / Care Role",
+            placeholder="Example: Family Caretaker, Home Care Assistant",
+            key="caretaker_reg_relationship"
+        )
+        care_language = st.selectbox(
+            "Preferred Language",
+            list(LANGUAGES.keys()),
+            key="caretaker_reg_language"
+        )
+
+        if st.button(
+            "🤝 Create Caretaker Account",
+            type="primary",
+            use_container_width=True
+        ):
+
+            if not care_name.strip():
+                st.error("Please enter the caretaker's name.")
+            elif not care_username.strip():
+                st.error("Please enter a username.")
+            elif len(care_password) < 6:
+                st.error("Password must contain at least 6 characters.")
+            elif care_password != care_confirm:
+                st.error("Passwords do not match.")
+            elif not phone_is_valid(care_phone):
+                st.error("Please enter a valid phone number.")
+            elif not email_is_valid(care_email):
+                st.error("Please enter a valid email address.")
+            elif not normalize_location(care_location):
+                st.error("Please enter the caretaker's location.")
+            else:
+
+                existing = conn.execute(
+                    "SELECT id FROM users WHERE LOWER(username)=LOWER(?)",
+                    (care_username.strip(),)
+                ).fetchone()
+
+                if existing:
+                    st.error("Username already exists.")
+                else:
+
+                    # Store the care role in qualification for backward-compatible schema usage.
+                    conn.execute(
+                        """
+                        INSERT INTO users(
+                            name, username, password_hash, language, baseline,
+                            role, adaptive_difficulty, phone, email, location,
+                            qualification, qualification_status, account_status, created_at
+                        )
+                        VALUES(
+                            ?, ?, ?, ?, 0, 'caretaker', 1, ?, ?, ?, ?,
+                            'Not Required', 'Active', ?
+                        )
+                        """,
+                        (
+                            care_name.strip(),
+                            care_username.strip(),
+                            hash_password(care_password),
+                            care_language,
+                            care_phone.strip(),
+                            care_email.strip(),
+                            normalize_location(care_location),
+                            care_relationship.strip(),
+                            datetime.now().isoformat(timespec="seconds")
+                        )
+                    )
+                    conn.commit()
+
+                    st.success(
+                        "Caretaker account created successfully."
+                    )
+                    announce(
+                        "Caretaker account created successfully. You can now log in and add your own patients.",
+                        care_language
+                    )
 
     st.stop()
 
@@ -2103,7 +2409,8 @@ if role == "admin":
             "📊 Overview",
             "👥 Patients",
             "🩺 Doctors",
-            "🔗 Assign Patients",
+            "🤝 Caretakers",
+            "✅ Verification & Management",
             "🎮 All Sessions",
             "📄 All Reports"
         ]
@@ -2116,55 +2423,47 @@ if role == "admin":
     with admin_tabs[0]:
 
         patient_count = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM users
-            WHERE role='patient'
-            """
+            "SELECT COUNT(*) FROM users WHERE role='patient'"
         ).fetchone()[0]
 
         doctor_count = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE role='doctor'"
+        ).fetchone()[0]
+
+        caretaker_count = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE role='caretaker'"
+        ).fetchone()[0]
+
+        pending_doctors = conn.execute(
             """
             SELECT COUNT(*)
             FROM users
             WHERE role='doctor'
+            AND account_status='Pending Verification'
             """
         ).fetchone()[0]
 
         session_count = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM sessions
-            """
+            "SELECT COUNT(*) FROM sessions"
         ).fetchone()[0]
 
         report_count = conn.execute(
-            """
-            SELECT COUNT(*)
-            FROM reports
-            """
+            "SELECT COUNT(*) FROM reports"
         ).fetchone()[0]
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Patients", patient_count)
+        c2.metric("Doctors", doctor_count)
+        c3.metric("Caretakers", caretaker_count)
+        c4.metric("Pending Doctor Verification", pending_doctors)
+        c5.metric("Game Sessions", session_count)
 
-        c1.metric(
-            "Patients",
-            patient_count
-        )
+        st.metric("Reports", report_count)
 
-        c2.metric(
-            "Doctors",
-            doctor_count
-        )
-
-        c3.metric(
-            "Game Sessions",
-            session_count
-        )
-
-        c4.metric(
-            "Reports",
-            report_count
+        st.info(
+            "The administrator manages registration, verification and account status. "
+            "Patient-to-doctor/caretaker linking is created directly by the provider who adds the patient; "
+            "there is no manual central patient assignment workflow."
         )
 
     # ========================================================
@@ -2176,13 +2475,9 @@ if role == "admin":
         patients = conn.execute(
             """
             SELECT
-                id,
-                name,
-                username,
-                language,
-                baseline,
-                doctor_id,
-                adaptive_difficulty
+                id, name, username, language, baseline,
+                doctor_id, caretaker_id, adaptive_difficulty,
+                phone, email, location
             FROM users
             WHERE role='patient'
             ORDER BY name
@@ -2190,31 +2485,26 @@ if role == "admin":
         ).fetchall()
 
         patient_data = []
-
         for patient_row in patients:
 
             doctor_name = "Not assigned"
+            caretaker_name = "Not assigned"
 
             if patient_row[5]:
-
-                doctor = conn.execute(
-                    """
-                    SELECT name
-                    FROM users
-                    WHERE id=?
-                    AND role='doctor'
-                    """,
-                    (
-                        patient_row[5],
-                    )
+                d = conn.execute(
+                    "SELECT name FROM users WHERE id=? AND role='doctor'",
+                    (patient_row[5],)
                 ).fetchone()
+                if d:
+                    doctor_name = "Dr. " + d[0]
 
-                if doctor:
-
-                    doctor_name = (
-                        "Dr. " +
-                        doctor[0]
-                    )
+            if patient_row[6]:
+                c = conn.execute(
+                    "SELECT name FROM users WHERE id=? AND role='caretaker'",
+                    (patient_row[6],)
+                ).fetchone()
+                if c:
+                    caretaker_name = c[0]
 
             patient_data.append(
                 {
@@ -2223,145 +2513,36 @@ if role == "admin":
                     "Username": patient_row[2],
                     "Language": patient_row[3],
                     "Baseline": patient_row[4],
-                    "Difficulty": patient_row[6],
-                    "Doctor": doctor_name
+                    "Difficulty": patient_row[7],
+                    "Phone": patient_row[8],
+                    "Email": patient_row[9],
+                    "Location": patient_row[10],
+                    "Doctor": doctor_name,
+                    "Caretaker": caretaker_name,
                 }
             )
 
         if patient_data:
-
             st.dataframe(
                 patient_data,
                 use_container_width=True,
                 hide_index=True
             )
-
         else:
-
-            st.info(
-                "No patients registered."
-            )
+            st.info("No patients registered.")
 
     # ========================================================
-    # DOCTORS
+    # DOCTORS - MANAGEMENT ONLY
     # ========================================================
 
     with admin_tabs[2]:
 
-        st.subheader(
-            "➕ Add Doctor"
-        )
-
-        doctor_name = st.text_input(
-            "Doctor Name",
-            key="admin_doctor_name"
-        )
-
-        doctor_username = st.text_input(
-            "Doctor Username",
-            key="admin_doctor_username"
-        )
-
-        doctor_password = st.text_input(
-            "Doctor Password",
-            type="password",
-            key="admin_doctor_password"
-        )
-
-        if st.button(
-            "➕ Add Doctor",
-            type="primary"
-        ):
-
-            if not doctor_name.strip():
-
-                st.error(
-                    "Enter doctor name."
-                )
-
-            elif not doctor_username.strip():
-
-                st.error(
-                    "Enter doctor username."
-                )
-
-            elif len(doctor_password) < 6:
-
-                st.error(
-                    "Doctor password must contain "
-                    "at least 6 characters."
-                )
-
-            else:
-
-                existing = conn.execute(
-                    """
-                    SELECT id
-                    FROM users
-                    WHERE LOWER(username)=LOWER(?)
-                    """,
-                    (
-                        doctor_username.strip(),
-                    )
-                ).fetchone()
-
-                if existing:
-
-                    st.error(
-                        "Username already exists."
-                    )
-
-                else:
-
-                    conn.execute(
-                        """
-                        INSERT INTO users(
-                            name,
-                            username,
-                            password_hash,
-                            language,
-                            baseline,
-                            role,
-                            adaptive_difficulty
-                        )
-                        VALUES(
-                            ?,
-                            ?,
-                            ?,
-                            'English',
-                            0,
-                            'doctor',
-                            1
-                        )
-                        """,
-                        (
-                            doctor_name.strip(),
-                            doctor_username.strip(),
-                            hash_password(
-                                doctor_password
-                            )
-                        )
-                    )
-
-                    conn.commit()
-
-                    announce(
-                        "Doctor added successfully.",
-                        "English"
-                    )
-
-                    st.rerun()
-
-        st.subheader(
-            "🩺 Registered Doctors"
-        )
-
         doctors = conn.execute(
             """
             SELECT
-                id,
-                name,
-                username
+                id, name, username, phone, email, location,
+                qualification, qualification_number,
+                qualification_status, account_status, created_at
             FROM users
             WHERE role='doctor'
             ORDER BY name
@@ -2369,167 +2550,197 @@ if role == "admin":
         ).fetchall()
 
         if doctors:
-
             st.dataframe(
                 [
                     {
-                        "ID": doctor[0],
-                        "Doctor": doctor[1],
-                        "Username": doctor[2]
+                        "ID": d[0],
+                        "Doctor": d[1],
+                        "Username": d[2],
+                        "Phone": d[3],
+                        "Email": d[4],
+                        "Location": d[5],
+                        "Qualification": d[6],
+                        "Registration No.": d[7],
+                        "Qualification Status": d[8],
+                        "Account Status": d[9],
+                        "Created": d[10],
                     }
-                    for doctor in doctors
+                    for d in doctors
                 ],
                 use_container_width=True,
                 hide_index=True
             )
-
         else:
-
-            st.info(
-                "No doctors added yet."
-            )
+            st.info("No doctor registrations yet.")
 
     # ========================================================
-    # ASSIGN PATIENTS
+    # CARETAKERS - MANAGEMENT
     # ========================================================
 
     with admin_tabs[3]:
 
-        doctors = conn.execute(
+        caretakers = conn.execute(
             """
             SELECT
-                id,
-                name,
-                username
+                id, name, username, phone, email, location,
+                qualification, account_status, created_at
             FROM users
-            WHERE role='doctor'
+            WHERE role='caretaker'
             ORDER BY name
             """
         ).fetchall()
 
-        patients = conn.execute(
-            """
-            SELECT
-                id,
-                name,
-                username
-            FROM users
-            WHERE role='patient'
-            ORDER BY name
-            """
-        ).fetchall()
-
-        if not doctors:
-
-            st.warning(
-                "Add a doctor before assigning patients."
-            )
-
-        elif not patients:
-
-            st.warning(
-                "No patients are available."
-            )
-
-        else:
-
-            doctor_options = {
-                f"Dr. {d[1]} ({d[2]})": d[0]
-                for d in doctors
-            }
-
-            patient_options = {
-                f"{p[1]} ({p[2]})": p[0]
-                for p in patients
-            }
-
-            selected_doctor = st.selectbox(
-                "Select Doctor",
-                list(
-                    doctor_options.keys()
-                ),
-                key="assign_doctor"
-            )
-
-            selected_patient = st.selectbox(
-                "Select Patient",
-                list(
-                    patient_options.keys()
-                ),
-                key="assign_patient"
-            )
-
-            if st.button(
-                "🔗 Assign Patient to Doctor",
-                type="primary"
-            ):
-
-                conn.execute(
-                    """
-                    UPDATE users
-                    SET doctor_id=?
-                    WHERE id=?
-                    AND role='patient'
-                    """,
-                    (
-                        doctor_options[
-                            selected_doctor
-                        ],
-                        patient_options[
-                            selected_patient
-                        ]
-                    )
-                )
-
-                conn.commit()
-
-                announce(
-                    "Patient assigned to doctor successfully.",
-                    "English"
-                )
-
-                st.rerun()
-
-            st.subheader(
-                "Current Assignments"
-            )
-
-            assignments = conn.execute(
-                """
-                SELECT
-                    p.name,
-                    p.username,
-                    d.name
-                FROM users p
-                LEFT JOIN users d
-                ON p.doctor_id=d.id
-                WHERE p.role='patient'
-                ORDER BY p.name
-                """
-            ).fetchall()
-
+        if caretakers:
             st.dataframe(
                 [
                     {
-                        "Patient": row[0],
-                        "Username": row[1],
-                        "Doctor": (
-                            "Dr. " + row[2]
-                            if row[2]
-                            else "Not assigned"
-                        )
+                        "ID": c[0],
+                        "Caretaker": c[1],
+                        "Username": c[2],
+                        "Phone": c[3],
+                        "Email": c[4],
+                        "Location": c[5],
+                        "Care Role": c[6],
+                        "Account Status": c[7],
+                        "Created": c[8],
                     }
-                    for row in assignments
+                    for c in caretakers
                 ],
                 use_container_width=True,
                 hide_index=True
             )
+        else:
+            st.info("No caretaker registrations yet.")
+
+    # ========================================================
+    # VERIFICATION & MANAGEMENT
+    # ========================================================
+
+    with admin_tabs[4]:
+
+        st.subheader("✅ Doctor Qualification Verification")
+
+        pending_doctors = conn.execute(
+            """
+            SELECT
+                id, name, username, phone, email, location,
+                qualification, qualification_number,
+                qualification_document, qualification_status,
+                account_status, created_at
+            FROM users
+            WHERE role='doctor'
+            AND qualification_status='Pending'
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+
+        if not pending_doctors:
+            st.success("No doctor qualifications are waiting for verification.")
+        else:
+            for d in pending_doctors:
+                with st.expander(
+                    f"🩺 {d[1]} — {d[6]} — Registration No. {d[7]}"
+                ):
+                    st.write(f"**Username:** {d[2]}")
+                    st.write(f"**Phone:** {d[3]}")
+                    st.write(f"**Email:** {d[4]}")
+                    st.write(f"**Location:** {d[5]}")
+                    st.write(f"**Qualification:** {d[6]}")
+                    st.write(f"**Registration Number:** {d[7]}")
+                    st.write(f"**Uploaded Document:** {d[8]}")
+                    st.write(f"**Submitted:** {d[11]}")
+
+                    verify_col, reject_col = st.columns(2)
+
+                    with verify_col:
+                        if st.button(
+                            "✅ Verify & Activate Doctor",
+                            key=f"verify_doctor_{d[0]}",
+                            use_container_width=True,
+                            type="primary"
+                        ):
+                            conn.execute(
+                                """
+                                UPDATE users
+                                SET qualification_status='Verified',
+                                    account_status='Active'
+                                WHERE id=? AND role='doctor'
+                                """,
+                                (d[0],)
+                            )
+                            conn.commit()
+                            announce(
+                                "Doctor qualification verified and account activated.",
+                                "English"
+                            )
+                            st.rerun()
+
+                    with reject_col:
+                        if st.button(
+                            "❌ Reject Verification",
+                            key=f"reject_doctor_{d[0]}",
+                            use_container_width=True
+                        ):
+                            conn.execute(
+                                """
+                                UPDATE users
+                                SET qualification_status='Rejected',
+                                    account_status='Rejected'
+                                WHERE id=? AND role='doctor'
+                                """,
+                                (d[0],)
+                            )
+                            conn.commit()
+                            announce(
+                                "Doctor qualification verification was rejected.",
+                                "English"
+                            )
+                            st.rerun()
+
+        st.divider()
+        st.subheader("👥 Account Status Management")
+
+        managed_users = conn.execute(
+            """
+            SELECT id, name, username, role, account_status, qualification_status
+            FROM users
+            WHERE role IN ('doctor', 'caretaker')
+            ORDER BY role, name
+            """
+        ).fetchall()
+
+        for u in managed_users:
+            m1, m2, m3, m4 = st.columns([3, 2, 2, 2])
+            m1.write(f"**{u[1]}** ({u[2]})")
+            m2.write(u[3].title())
+            m3.write(u[4])
+            with m4:
+                action_label = "Deactivate" if u[4] == "Active" else "Activate"
+                if st.button(
+                    action_label,
+                    key=f"status_{u[0]}",
+                    use_container_width=True
+                ):
+                    new_status = "Inactive" if u[4] == "Active" else "Active"
+                    conn.execute(
+                        "UPDATE users SET account_status=? WHERE id=? AND role IN ('doctor','caretaker')",
+                        (new_status, u[0])
+                    )
+                    conn.commit()
+                    st.rerun()
+
+        st.divider()
+        st.warning(
+            "Central manual patient assignment has been removed. "
+            "The system now relies on Doctor/Caretaker → Add Patient onboarding, "
+            "which automatically links the new patient to the provider who created the account."
+        )
 
     # ========================================================
     # ALL SESSIONS
     # ========================================================
 
-    with admin_tabs[4]:
+    with admin_tabs[5]:
 
         sessions = conn.execute(
             """
@@ -2548,7 +2759,6 @@ if role == "admin":
         ).fetchall()
 
         if sessions:
-
             st.dataframe(
                 [
                     {
@@ -2564,18 +2774,14 @@ if role == "admin":
                 use_container_width=True,
                 hide_index=True
             )
-
         else:
-
-            st.info(
-                "No sessions available."
-            )
+            st.info("No sessions available.")
 
     # ========================================================
     # ALL REPORTS
     # ========================================================
 
-    with admin_tabs[5]:
+    with admin_tabs[6]:
 
         reports = conn.execute(
             """
@@ -2595,34 +2801,15 @@ if role == "admin":
         ).fetchall()
 
         if reports:
-
             for report in reports:
-
                 with st.expander(
                     f"{report[1]} — {report[3]}"
                 ):
-
-                    st.write(
-                        f"Doctor: Dr. {report[2]}"
-                    )
-
-                    st.write(
-                        f"Date: {report[0]}"
-                    )
-
-                    st.write(
-                        report[4]
-                    )
-
+                    st.write(f"Doctor: Dr. {report[2]}")
+                    st.write(f"Date: {report[0]}")
+                    st.write(report[4])
         else:
-
-            st.info(
-                "No reports available."
-            )
-
-    # ========================================================
-    # ADMIN LOGOUT
-    # ========================================================
+            st.info("No reports available.")
 
     st.divider()
 
@@ -2630,9 +2817,7 @@ if role == "admin":
         "🚪 Logout",
         key="admin_logout"
     ):
-
         st.session_state.clear()
-
         st.rerun()
 
     st.stop()
@@ -2648,37 +2833,40 @@ if role == "doctor":
         f"🩺 Doctor Portal — Dr. {name}"
     )
 
-    st.info(
-        "Doctors can view assigned patients, "
-        "review performance and send reports. "
-        "Game access is disabled for doctors."
-    )
+    doctor_profile = conn.execute(
+        """
+        SELECT
+            phone, email, location, qualification,
+            qualification_number, qualification_status,
+            account_status
+        FROM users
+        WHERE id=? AND role='doctor'
+        """,
+        (user_id,)
+    ).fetchone()
 
     doctor_tabs = st.tabs(
         [
             "🏠 Overview",
+            "➕ Add Patient",
             "👥 My Patients",
             "📊 Patient Performance",
-            "📄 Send Report"
+            "📄 Send Report",
+            "👤 My Profile"
         ]
     )
 
     assigned_patients = conn.execute(
         """
         SELECT
-            id,
-            name,
-            username,
-            language,
-            baseline
+            id, name, username, language, baseline,
+            phone, email, location, adaptive_difficulty
         FROM users
         WHERE role='patient'
         AND doctor_id=?
         ORDER BY name
         """,
-        (
-            user_id,
-        )
+        (user_id,)
     ).fetchall()
 
     # ========================================================
@@ -2687,186 +2875,151 @@ if role == "doctor":
 
     with doctor_tabs[0]:
 
-        c1, c2 = st.columns(2)
-
-        c1.metric(
-            "Assigned Patients",
-            len(assigned_patients)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("My Patients", len(assigned_patients))
+        c2.metric("Your Role", "Doctor")
+        c3.metric(
+            "Qualification",
+            doctor_profile[4] if doctor_profile and doctor_profile[5] == "Verified" else "Pending"
         )
 
-        c2.metric(
-            "Your Role",
-            "Doctor"
+        st.success(
+            "✅ Doctor account is active. Patient data is restricted to patients created/linked under your account."
+        )
+
+        st.info(
+            "Doctor onboarding model: use **Add Patient** to create a new patient account. "
+            "The new patient is automatically linked to you. No administrator assignment is required."
         )
 
         st.warning(
-            "🎮 Cognitive games are not available "
-            "for doctor accounts."
+            "🎮 Cognitive games are not available for doctor accounts."
         )
 
     # ========================================================
-    # DOCTOR PATIENTS
+    # ADD PATIENT - AUTOMATICALLY LINKED TO THIS DOCTOR
     # ========================================================
 
     with doctor_tabs[1]:
 
-        if assigned_patients:
+        st.subheader("➕ Add Patient")
+        st.caption(
+            "A patient created here is automatically linked to you and will appear in My Patients."
+        )
 
+        with st.form("doctor_add_patient_form"):
+            patient_name = st.text_input("Patient Full Name", key="doctor_add_patient_name")
+            patient_username = st.text_input("Patient Username", key="doctor_add_patient_username")
+            patient_password = st.text_input("Patient Password", type="password", key="doctor_add_patient_password")
+            patient_confirm = st.text_input("Confirm Password", type="password", key="doctor_add_patient_confirm")
+            patient_phone = st.text_input("Phone Number", key="doctor_add_patient_phone")
+            patient_email = st.text_input("Email ID", key="doctor_add_patient_email")
+            patient_location = st.text_input("Location", key="doctor_add_patient_location")
+            patient_language = st.selectbox(
+                "Language",
+                list(LANGUAGES.keys()),
+                key="doctor_add_patient_language"
+            )
+
+            submitted = st.form_submit_button(
+                "➕ Add Patient & Link Automatically",
+                type="primary",
+                use_container_width=True
+            )
+
+        if submitted:
+
+            if not patient_name.strip():
+                st.error("Please enter the patient's name.")
+            elif not patient_username.strip():
+                st.error("Please enter a patient username.")
+            elif len(patient_password) < 6:
+                st.error("Patient password must contain at least 6 characters.")
+            elif patient_password != patient_confirm:
+                st.error("Passwords do not match.")
+            elif not phone_is_valid(patient_phone):
+                st.error("Please enter a valid patient phone number.")
+            elif not email_is_valid(patient_email):
+                st.error("Please enter a valid patient email address.")
+            elif not normalize_location(patient_location):
+                st.error("Please enter the patient's location.")
+            else:
+
+                existing = conn.execute(
+                    "SELECT id FROM users WHERE LOWER(username)=LOWER(?)",
+                    (patient_username.strip(),)
+                ).fetchone()
+
+                if existing:
+                    st.error("Username already exists.")
+                else:
+
+                    conn.execute(
+                        """
+                        INSERT INTO users(
+                            name, username, password_hash, language,
+                            baseline, role, adaptive_difficulty,
+                            doctor_id, caretaker_id, phone, email, location,
+                            account_status, created_by_id, created_at
+                        )
+                        VALUES(
+                            ?, ?, ?, ?, 0, 'patient', 1,
+                            ?, NULL, ?, ?, ?, 'Active', ?, ?
+                        )
+                        """,
+                        (
+                            patient_name.strip(),
+                            patient_username.strip(),
+                            hash_password(patient_password),
+                            patient_language,
+                            user_id,
+                            patient_phone.strip(),
+                            patient_email.strip(),
+                            normalize_location(patient_location),
+                            user_id,
+                            datetime.now().isoformat(timespec="seconds")
+                        )
+                    )
+                    conn.commit()
+
+                    announce(
+                        f"Patient {patient_name.strip()} was added and automatically linked to you.",
+                        language
+                    )
+                    st.success(
+                        f"Patient {patient_name.strip()} created successfully and linked to you."
+                    )
+                    st.rerun()
+
+    # ========================================================
+    # DOCTOR OWN PATIENTS
+    # ========================================================
+
+    with doctor_tabs[2]:
+
+        if assigned_patients:
             st.dataframe(
                 [
                     {
                         "Patient": p[1],
                         "Username": p[2],
                         "Language": p[3],
-                        "Baseline": p[4]
+                        "Baseline": p[4],
+                        "Phone": p[5],
+                        "Email": p[6],
+                        "Location": p[7],
+                        "Difficulty": p[8]
                     }
                     for p in assigned_patients
                 ],
                 use_container_width=True,
                 hide_index=True
             )
-
         else:
-
-            st.info(
-                "No patients have been assigned to you."
-            )
+            st.info("No patients have been added to your account yet.")
 
     # ========================================================
-    # DOCTOR PERFORMANCE
-    # ========================================================
-
-    with doctor_tabs[2]:
-
-        if assigned_patients:
-
-            patient_map = {
-                f"{p[1]} ({p[2]})": p[0]
-                for p in assigned_patients
-            }
-
-            selected_patient_name = st.selectbox(
-                "Select Patient",
-                list(
-                    patient_map.keys()
-                ),
-                key="doctor_view_patient"
-            )
-
-            selected_patient_id = patient_map[
-                selected_patient_name
-            ]
-
-            patient_data = conn.execute(
-                """
-                SELECT
-                    id,
-                    name,
-                    username,
-                    language,
-                    baseline,
-                    adaptive_difficulty
-                FROM users
-                WHERE id=?
-                AND role='patient'
-                AND doctor_id=?
-                """,
-                (
-                    selected_patient_id,
-                    user_id
-                )
-            ).fetchone()
-
-            if patient_data:
-
-                st.subheader(
-                    f"👤 {patient_data[1]}"
-                )
-
-                c1, c2, c3 = st.columns(3)
-
-                c1.metric(
-                    "Baseline",
-                    f"{patient_data[4]:.1f}"
-                )
-
-                c2.metric(
-                    "Difficulty",
-                    patient_data[5]
-                )
-
-                sessions = conn.execute(
-                    """
-                    SELECT
-                        game,
-                        score,
-                        difficulty,
-                        created_at
-                    FROM sessions
-                    WHERE user_id=?
-                    ORDER BY id DESC
-                    """,
-                    (
-                        selected_patient_id,
-                    )
-                ).fetchall()
-
-                scores = [
-                    float(s[1])
-                    for s in sessions
-                ]
-
-                average_score = (
-                    sum(scores) /
-                    len(scores)
-                    if scores
-                    else 0
-                )
-
-                best_score = (
-                    max(scores)
-                    if scores
-                    else 0
-                )
-
-                c2.metric(
-                    "Average Score",
-                    f"{average_score:.1f}"
-                )
-
-                c3.metric(
-                    "Best Score",
-                    f"{best_score:.1f}"
-                )
-
-                if sessions:
-
-                    st.subheader(
-                        "📊 Game Performance"
-                    )
-
-                    st.dataframe(
-                        [
-                            {
-                                "Game": s[0],
-                                "Score": s[1],
-                                "Difficulty": s[2],
-                                "Date": s[3]
-                            }
-                            for s in sessions
-                        ],
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-                else:
-
-                    st.info(
-                        "No game sessions recorded."
-                    )
-
-    # ========================================================
-    # SEND REPORT
+    # DOCTOR PATIENT PERFORMANCE
     # ========================================================
 
     with doctor_tabs[3]:
@@ -2878,166 +3031,211 @@ if role == "doctor":
                 for p in assigned_patients
             }
 
-            selected_report_patient = st.selectbox(
+            selected_patient_name = st.selectbox(
                 "Select Patient",
-                list(
-                    patient_map.keys()
-                ),
-                key="doctor_report_patient"
+                list(patient_map.keys()),
+                key="doctor_view_patient"
             )
 
-            report_patient_id = patient_map[
-                selected_report_patient
-            ]
+            selected_patient_id = patient_map[selected_patient_name]
 
-            sessions = conn.execute(
-                """
-                SELECT score
-                FROM sessions
-                WHERE user_id=?
-                """,
-                (
-                    report_patient_id,
-                )
-            ).fetchall()
-
-            report_scores = [
-                float(row[0])
-                for row in sessions
-            ]
-
-            report_average = (
-                sum(report_scores) /
-                len(report_scores)
-                if report_scores
-                else 0
-            )
-
-            report_best = (
-                max(report_scores)
-                if report_scores
-                else 0
-            )
-
-            st.write(
-                f"Completed sessions: "
-                f"**{len(report_scores)}**"
-            )
-
-            st.write(
-                f"Average score: "
-                f"**{report_average:.1f}**"
-            )
-
-            st.write(
-                f"Best score: "
-                f"**{report_best:.1f}**"
-            )
-
-            report_title = st.text_input(
-                "Report Title",
-                value="Overall Performance Report",
-                key="report_title"
-            )
-
-            report_text = st.text_area(
-                "Overall Performance Report",
-                value=(
-                    "Overall Performance Report\n\n"
-                    f"Total sessions: {len(report_scores)}\n"
-                    f"Average score: {report_average:.1f}\n"
-                    f"Best score: {report_best:.1f}\n\n"
-                    "Doctor's observations:\n"
-                ),
-                height=280,
-                key="report_text"
-            )
-
-            if st.button(
-                "📤 Send Report to Patient",
-                type="primary"
+            # Server-side privacy check.
+            if not provider_can_manage_patient(
+                user_id,
+                "doctor",
+                selected_patient_id
             ):
+                st.error("You are not authorized to access this patient.")
+            else:
 
-                valid_patient = conn.execute(
+                patient_data = conn.execute(
                     """
-                    SELECT id
+                    SELECT
+                        id, name, username, language,
+                        baseline, adaptive_difficulty,
+                        phone, email, location
                     FROM users
                     WHERE id=?
                     AND role='patient'
                     AND doctor_id=?
                     """,
-                    (
-                        report_patient_id,
-                        user_id
-                    )
+                    (selected_patient_id, user_id)
                 ).fetchone()
 
-                if not valid_patient:
+                if patient_data:
 
-                    st.error(
-                        "You are not authorized to send "
-                        "a report to this patient."
-                    )
+                    st.subheader(f"👤 {patient_data[1]}")
 
-                elif not report_text.strip():
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Baseline", f"{patient_data[4]:.1f}")
+                    c2.metric("Difficulty", patient_data[5])
 
-                    st.error(
-                        "Report cannot be empty."
-                    )
-
-                else:
-
-                    conn.execute(
+                    sessions = conn.execute(
                         """
-                        INSERT INTO reports(
-                            patient_id,
-                            doctor_id,
-                            title,
-                            report_text,
-                            created_at,
-                            status
-                        )
-                        VALUES(
-                            ?,
-                            ?,
-                            ?,
-                            ?,
-                            ?,
-                            'Sent'
-                        )
+                        SELECT game, score, difficulty, created_at
+                        FROM sessions
+                        WHERE user_id=?
+                        ORDER BY id DESC
                         """,
-                        (
-                            report_patient_id,
-                            user_id,
-                            report_title.strip(),
-                            report_text.strip(),
-                            datetime.now().isoformat(
-                                timespec="seconds"
-                            )
+                        (selected_patient_id,)
+                    ).fetchall()
+
+                    scores = [float(s[1]) for s in sessions]
+                    average_score = sum(scores) / len(scores) if scores else 0
+                    best_score = max(scores) if scores else 0
+
+                    c3.metric("Average Score", f"{average_score:.1f}")
+                    st.metric("Best Score", f"{best_score:.1f}")
+
+                    st.write(f"**Phone:** {patient_data[6]}")
+                    st.write(f"**Email:** {patient_data[7]}")
+                    st.write(f"**Location:** {patient_data[8]}")
+
+                    if sessions:
+                        st.subheader("📊 Game Performance")
+                        st.dataframe(
+                            [
+                                {
+                                    "Game": s[0],
+                                    "Score": s[1],
+                                    "Difficulty": s[2],
+                                    "Date": s[3]
+                                }
+                                for s in sessions
+                            ],
+                            use_container_width=True,
+                            hide_index=True
                         )
-                    )
 
-                    conn.commit()
+                        progress_df = pd.DataFrame(
+                            [
+                                {
+                                    "Session": idx,
+                                    "Score": float(s[1])
+                                }
+                                for idx, s in enumerate(reversed(sessions[-5:]), start=1)
+                            ]
+                        )
+                        if not progress_df.empty:
+                            st.line_chart(
+                                progress_df.set_index("Session"),
+                                y="Score",
+                                use_container_width=True
+                            )
+                    else:
+                        st.info("No game sessions recorded.")
 
-                    announce(
-                        (
-                            "Overall performance report "
-                            "sent successfully to the patient."
-                        ),
-                        "English"
-                    )
+    # ========================================================
+    # DOCTOR REPORTS
+    # ========================================================
 
-                    st.rerun()
+    with doctor_tabs[4]:
 
-        else:
+        if assigned_patients:
 
-            st.info(
-                "Assign patients before sending reports."
+            patient_map = {
+                f"{p[1]} ({p[2]})": p[0]
+                for p in assigned_patients
+            }
+
+            selected_report_patient = st.selectbox(
+                "Select Patient",
+                list(patient_map.keys()),
+                key="doctor_report_patient"
             )
 
+            report_patient_id = patient_map[selected_report_patient]
+
+            if provider_can_manage_patient(
+                user_id,
+                "doctor",
+                report_patient_id
+            ):
+
+                sessions = conn.execute(
+                    "SELECT score FROM sessions WHERE user_id=?",
+                    (report_patient_id,)
+                ).fetchall()
+
+                report_scores = [float(row[0]) for row in sessions]
+                report_average = sum(report_scores) / len(report_scores) if report_scores else 0
+                report_best = max(report_scores) if report_scores else 0
+
+                st.write(f"Completed sessions: **{len(report_scores)}**")
+                st.write(f"Average score: **{report_average:.1f}**")
+                st.write(f"Best score: **{report_best:.1f}**")
+
+                report_title = st.text_input(
+                    "Report Title",
+                    value="Overall Performance Report",
+                    key="report_title"
+                )
+
+                report_text = st.text_area(
+                    "Overall Performance Report",
+                    value=(
+                        "Overall Performance Report\n\n"
+                        f"Total sessions: {len(report_scores)}\n"
+                        f"Average score: {report_average:.1f}\n"
+                        f"Best score: {report_best:.1f}\n\n"
+                        "Doctor's observations:\n"
+                    ),
+                    height=280,
+                    key="report_text"
+                )
+
+                if st.button(
+                    "📤 Send Report to Patient",
+                    type="primary"
+                ):
+
+                    if not report_text.strip():
+                        st.error("Report cannot be empty.")
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO reports(
+                                patient_id,
+                                doctor_id,
+                                title,
+                                report_text,
+                                created_at,
+                                status
+                            )
+                            VALUES(?, ?, ?, ?, ?, 'Sent')
+                            """,
+                            (
+                                report_patient_id,
+                                user_id,
+                                report_title.strip(),
+                                report_text.strip(),
+                                datetime.now().isoformat(timespec="seconds")
+                            )
+                        )
+                        conn.commit()
+                        announce(
+                            "Overall performance report sent successfully to the patient.",
+                            "English"
+                        )
+                        st.rerun()
+
+        else:
+            st.info("Add patients before sending reports.")
+
     # ========================================================
-    # DOCTOR LOGOUT
+    # DOCTOR PROFILE
     # ========================================================
+
+    with doctor_tabs[5]:
+
+        if doctor_profile:
+            st.write(f"**Phone:** {doctor_profile[0]}")
+            st.write(f"**Email:** {doctor_profile[1]}")
+            st.write(f"**Location:** {doctor_profile[2]}")
+            st.write(f"**Qualification:** {doctor_profile[3]}")
+            st.write(f"**Registration Number:** {doctor_profile[4]}")
+            st.write(f"**Qualification Verification:** {doctor_profile[5]}")
+            st.write(f"**Account Status:** {doctor_profile[6]}")
 
     st.divider()
 
@@ -3045,9 +3243,332 @@ if role == "doctor":
         "🚪 Logout",
         key="doctor_logout"
     ):
-
         st.session_state.clear()
+        st.rerun()
 
+    st.stop()
+
+
+# ============================================================
+# CARETAKER DASHBOARD
+# ============================================================
+
+if role == "caretaker":
+
+    st.title(
+        f"🤝 Caretaker Portal — {name}"
+    )
+
+    caretaker_profile = conn.execute(
+        """
+        SELECT phone, email, location, qualification, account_status
+        FROM users
+        WHERE id=? AND role='caretaker'
+        """,
+        (user_id,)
+    ).fetchone()
+
+    caretaker_tabs = st.tabs(
+        [
+            "🏠 Overview",
+            "➕ Add Patient",
+            "👥 My Patients",
+            "📊 Patient Performance",
+            "🔔 Patient Reminders",
+            "👤 My Profile"
+        ]
+    )
+
+    own_patients = conn.execute(
+        """
+        SELECT
+            id, name, username, language, baseline,
+            phone, email, location, adaptive_difficulty
+        FROM users
+        WHERE role='patient'
+        AND caretaker_id=?
+        ORDER BY name
+        """,
+        (user_id,)
+    ).fetchall()
+
+    with caretaker_tabs[0]:
+
+        c1, c2 = st.columns(2)
+        c1.metric("My Patients", len(own_patients))
+        c2.metric("Your Role", "Caretaker")
+
+        st.success(
+            "✅ Caretaker access is limited to patients linked to your account."
+        )
+        st.info(
+            "Use **Add Patient** to create a patient account. "
+            "The patient is automatically linked to you."
+        )
+        st.warning(
+            "🎮 Cognitive games are available only to patient accounts."
+        )
+
+    with caretaker_tabs[1]:
+
+        st.subheader("➕ Add Patient")
+        st.caption(
+            "The new patient will automatically belong to your caretaker account."
+        )
+
+        with st.form("caretaker_add_patient_form"):
+            patient_name = st.text_input("Patient Full Name", key="caretaker_add_patient_name")
+            patient_username = st.text_input("Patient Username", key="caretaker_add_patient_username")
+            patient_password = st.text_input("Patient Password", type="password", key="caretaker_add_patient_password")
+            patient_confirm = st.text_input("Confirm Password", type="password", key="caretaker_add_patient_confirm")
+            patient_phone = st.text_input("Phone Number", key="caretaker_add_patient_phone")
+            patient_email = st.text_input("Email ID", key="caretaker_add_patient_email")
+            patient_location = st.text_input("Location", key="caretaker_add_patient_location")
+            patient_language = st.selectbox(
+                "Language",
+                list(LANGUAGES.keys()),
+                key="caretaker_add_patient_language"
+            )
+
+            submitted = st.form_submit_button(
+                "➕ Add Patient & Link Automatically",
+                type="primary",
+                use_container_width=True
+            )
+
+        if submitted:
+
+            if not patient_name.strip():
+                st.error("Please enter the patient's name.")
+            elif not patient_username.strip():
+                st.error("Please enter a patient username.")
+            elif len(patient_password) < 6:
+                st.error("Patient password must contain at least 6 characters.")
+            elif patient_password != patient_confirm:
+                st.error("Passwords do not match.")
+            elif not phone_is_valid(patient_phone):
+                st.error("Please enter a valid patient phone number.")
+            elif not email_is_valid(patient_email):
+                st.error("Please enter a valid patient email address.")
+            elif not normalize_location(patient_location):
+                st.error("Please enter the patient's location.")
+            else:
+
+                existing = conn.execute(
+                    "SELECT id FROM users WHERE LOWER(username)=LOWER(?)",
+                    (patient_username.strip(),)
+                ).fetchone()
+
+                if existing:
+                    st.error("Username already exists.")
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO users(
+                            name, username, password_hash, language,
+                            baseline, role, adaptive_difficulty,
+                            doctor_id, caretaker_id, phone, email, location,
+                            account_status, created_by_id, created_at
+                        )
+                        VALUES(
+                            ?, ?, ?, ?, 0, 'patient', 1,
+                            NULL, ?, ?, ?, ?, 'Active', ?, ?
+                        )
+                        """,
+                        (
+                            patient_name.strip(),
+                            patient_username.strip(),
+                            hash_password(patient_password),
+                            patient_language,
+                            user_id,
+                            patient_phone.strip(),
+                            patient_email.strip(),
+                            normalize_location(patient_location),
+                            user_id,
+                            datetime.now().isoformat(timespec="seconds")
+                        )
+                    )
+                    conn.commit()
+
+                    announce(
+                        f"Patient {patient_name.strip()} was added and automatically linked to you.",
+                        language
+                    )
+                    st.success(
+                        f"Patient {patient_name.strip()} created successfully and linked to you."
+                    )
+                    st.rerun()
+
+    with caretaker_tabs[2]:
+
+        if own_patients:
+            st.dataframe(
+                [
+                    {
+                        "Patient": p[1],
+                        "Username": p[2],
+                        "Language": p[3],
+                        "Baseline": p[4],
+                        "Phone": p[5],
+                        "Email": p[6],
+                        "Location": p[7],
+                        "Difficulty": p[8]
+                    }
+                    for p in own_patients
+                ],
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No patients have been added to your caretaker account yet.")
+
+    with caretaker_tabs[3]:
+
+        if own_patients:
+
+            patient_map = {
+                f"{p[1]} ({p[2]})": p[0]
+                for p in own_patients
+            }
+
+            selected_patient_name = st.selectbox(
+                "Select Patient",
+                list(patient_map.keys()),
+                key="caretaker_view_patient"
+            )
+
+            selected_patient_id = patient_map[selected_patient_name]
+
+            if not provider_can_manage_patient(
+                user_id,
+                "caretaker",
+                selected_patient_id
+            ):
+                st.error("You are not authorized to access this patient.")
+            else:
+
+                patient_data = conn.execute(
+                    """
+                    SELECT
+                        id, name, username, language,
+                        baseline, adaptive_difficulty,
+                        phone, email, location
+                    FROM users
+                    WHERE id=?
+                    AND role='patient'
+                    AND caretaker_id=?
+                    """,
+                    (selected_patient_id, user_id)
+                ).fetchone()
+
+                if patient_data:
+                    st.subheader(f"👤 {patient_data[1]}")
+
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Baseline", f"{patient_data[4]:.1f}")
+                    c2.metric("Difficulty", patient_data[5])
+
+                    sessions = conn.execute(
+                        """
+                        SELECT game, score, difficulty, created_at
+                        FROM sessions
+                        WHERE user_id=?
+                        ORDER BY id DESC
+                        """,
+                        (selected_patient_id,)
+                    ).fetchall()
+
+                    scores = [float(s[1]) for s in sessions]
+                    c3.metric(
+                        "Average Score",
+                        f"{(sum(scores) / len(scores)) if scores else 0:.1f}"
+                    )
+                    st.metric(
+                        "Best Score",
+                        f"{max(scores) if scores else 0:.1f}"
+                    )
+
+                    st.write(f"**Phone:** {patient_data[6]}")
+                    st.write(f"**Email:** {patient_data[7]}")
+                    st.write(f"**Location:** {patient_data[8]}")
+
+                    if sessions:
+                        st.dataframe(
+                            [
+                                {
+                                    "Game": s[0],
+                                    "Score": s[1],
+                                    "Difficulty": s[2],
+                                    "Date": s[3]
+                                }
+                                for s in sessions
+                            ],
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                    else:
+                        st.info("No game sessions recorded.")
+
+    with caretaker_tabs[4]:
+
+        if own_patients:
+            patient_map = {
+                f"{p[1]} ({p[2]})": p[0]
+                for p in own_patients
+            }
+            selected_reminder_patient = st.selectbox(
+                "Select Patient",
+                list(patient_map.keys()),
+                key="caretaker_reminder_patient"
+            )
+            reminder_patient_id = patient_map[selected_reminder_patient]
+
+            if provider_can_manage_patient(
+                user_id,
+                "caretaker",
+                reminder_patient_id
+            ):
+                patient_reminders = conn.execute(
+                    """
+                    SELECT id, title, due_time, status
+                    FROM reminders
+                    WHERE user_id=?
+                    ORDER BY id DESC
+                    """,
+                    (reminder_patient_id,)
+                ).fetchall()
+
+                if patient_reminders:
+                    st.dataframe(
+                        [
+                            {
+                                "Reminder": r[1],
+                                "Due": r[2],
+                                "Status": r[3]
+                            }
+                            for r in patient_reminders
+                        ],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.info("No reminders recorded for this patient.")
+
+    with caretaker_tabs[5]:
+
+        st.write(f"**Phone:** {caretaker_profile[0] if caretaker_profile else ''}")
+        st.write(f"**Email:** {caretaker_profile[1] if caretaker_profile else ''}")
+        st.write(f"**Location:** {caretaker_profile[2] if caretaker_profile else ''}")
+        st.write(f"**Care Role:** {caretaker_profile[3] if caretaker_profile else ''}")
+        st.write(f"**Account Status:** {caretaker_profile[4] if caretaker_profile else ''}")
+
+    st.divider()
+
+    if st.button(
+        "🚪 Logout",
+        key="caretaker_logout"
+    ):
+        st.session_state.clear()
         st.rerun()
 
     st.stop()
@@ -3067,7 +3588,11 @@ patient = conn.execute(
         baseline,
         role,
         doctor_id,
-        adaptive_difficulty
+        adaptive_difficulty,
+        caretaker_id,
+        phone,
+        email,
+        location
     FROM users
     WHERE id=?
     AND role='patient'
@@ -3098,6 +3623,11 @@ name = patient[1]
 username = patient[2]
 language = patient[3]
 doctor_id = patient[6]
+caretaker_id = patient[8] if len(patient) > 8 else None
+phone = patient[9] if len(patient) > 9 else ""
+email = patient[10] if len(patient) > 10 else ""
+location = patient[11] if len(patient) > 11 else ""
+st.session_state.caretaker_id = caretaker_id
 
 
 # ============================================================
@@ -3522,15 +4052,6 @@ with st.sidebar:
                             )
                         )
 
-                        reminder_category = detect_reminder_category(
-                            command
-                        )
-
-                        reminder_title = (
-                            f"{reminder_prefix(reminder_category)}: "
-                            f"{reminder_title}"
-                        )
-
                         conn.execute(
                             """
                             INSERT INTO reminders(
@@ -3930,29 +4451,47 @@ if selected_page == "home":
 
         doctor = conn.execute(
             """
-            SELECT
-                name,
-                username
+            SELECT name, username, phone, email, location
             FROM users
             WHERE id=?
             AND role='doctor'
             """,
-            (
-                doctor_id,
-            )
+            (doctor_id,)
         ).fetchone()
 
         if doctor:
-
             st.success(
-                f"🩺 Assigned Doctor: "
-                f"Dr. {doctor[0]}"
+                f"🩺 Assigned Doctor: Dr. {doctor[0]}"
+            )
+            st.caption(
+                f"Phone: {doctor[2]} | Email: {doctor[3]} | Location: {doctor[4]}"
+            )
+
+    elif caretaker_id:
+
+        caretaker = conn.execute(
+            """
+            SELECT name, username, phone, email, location
+            FROM users
+            WHERE id=?
+            AND role='caretaker'
+            """,
+            (caretaker_id,)
+        ).fetchone()
+
+        if caretaker:
+            st.success(
+                f"🤝 Assigned Caretaker: {caretaker[0]}"
+            )
+            st.caption(
+                f"Phone: {caretaker[2]} | Email: {caretaker[3]} | Location: {caretaker[4]}"
             )
 
     else:
 
         st.info(
-            "🩺 No doctor has been assigned yet."
+            "🩺/🤝 No doctor or caretaker has been linked yet. "
+            "A local doctor or caretaker can add you directly from their portal."
         )
 
     st.info(
@@ -4472,27 +5011,9 @@ elif selected_page == "reminders":
         "➕ Add New Reminder"
     )
 
-    reminder_category_label = st.selectbox(
-        "Reminder Type",
-        list(REMINDER_CATEGORIES.keys()),
-        key="reminder_category"
-    )
-
-    reminder_category = REMINDER_CATEGORIES[
-        reminder_category_label
-    ]
-
-    reminder_examples = {
-        "Medicine": "Example: Take morning medicine",
-        "Hydration": "Example: Drink water",
-        "Daily Activity": "Example: Go for a 20 minute walk",
-        "Medical Appointment": "Example: Doctor appointment",
-        "General Reminder": "Example: Call family",
-    }
-
     reminder_title = st.text_input(
         "Reminder Title",
-        placeholder=reminder_examples[reminder_category],
+        placeholder="Example: Drink water",
         key="reminder_title"
     )
 
@@ -4526,11 +5047,6 @@ elif selected_page == "reminders":
                 )
             )
 
-            stored_reminder_title = (
-                f"{reminder_prefix(reminder_category)}: "
-                f"{reminder_title.strip()}"
-            )
-
             conn.execute(
                 """
                 INSERT INTO reminders(
@@ -4548,7 +5064,7 @@ elif selected_page == "reminders":
                 """,
                 (
                     user_id,
-                    stored_reminder_title,
+                    reminder_title.strip(),
                     (
                         f"{date.today()} "
                         f"{formatted_time}"
@@ -4560,8 +5076,9 @@ elif selected_page == "reminders":
 
             queue_voice(
                 (
-                    f"{reminder_category} reminder added: "
-                    f"{reminder_title.strip()} for {formatted_time}."
+                    f"{reminder_title.strip()} "
+                    f"reminder has been added "
+                    f"for {formatted_time}."
                 ),
                 language
             )
@@ -4819,36 +5336,56 @@ elif selected_page == "details":
         f"{difficulty}/3"
     )
 
+    st.write(f"**Phone:** {phone}")
+    st.write(f"**Email:** {email}")
+    st.write(f"**Location:** {location}")
+
     if doctor_id:
 
         doctor = conn.execute(
             """
-            SELECT
-                name,
-                username
+            SELECT name, username, phone, email, location
             FROM users
             WHERE id=?
             AND role='doctor'
             """,
-            (
-                doctor_id,
-            )
+            (doctor_id,)
         ).fetchone()
 
         if doctor:
-
             st.success(
                 f"🩺 Assigned Doctor: Dr. {doctor[0]}"
             )
+            st.write(f"Doctor Username: {doctor[1]}")
+            st.write(f"Doctor Phone: {doctor[2]}")
+            st.write(f"Doctor Email: {doctor[3]}")
+            st.write(f"Doctor Location: {doctor[4]}")
 
-            st.write(
-                f"Doctor Username: {doctor[1]}"
+    elif caretaker_id:
+
+        caretaker = conn.execute(
+            """
+            SELECT name, username, phone, email, location
+            FROM users
+            WHERE id=?
+            AND role='caretaker'
+            """,
+            (caretaker_id,)
+        ).fetchone()
+
+        if caretaker:
+            st.success(
+                f"🤝 Assigned Caretaker: {caretaker[0]}"
             )
+            st.write(f"Caretaker Username: {caretaker[1]}")
+            st.write(f"Caretaker Phone: {caretaker[2]}")
+            st.write(f"Caretaker Email: {caretaker[3]}")
+            st.write(f"Caretaker Location: {caretaker[4]}")
 
     else:
 
         st.info(
-            "No doctor assigned."
+            "No doctor or caretaker linked yet. A provider can add the patient directly."
         )
 
 
