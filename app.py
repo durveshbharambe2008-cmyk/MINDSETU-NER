@@ -1809,9 +1809,10 @@ DEFAULT_SESSION_VALUES = {
 
     "memory_round": 0,
     "memory_total_score": 0.0,
-    # Timestamp used by the 10-second browser countdown.
+    # Timestamp used by the 10-second live countdown.
     # The answer input is not rendered until this period has elapsed.
     "memory_display_started_at": None,
+    "memory_timer_finished": False,
     "pattern_round": 0,
     "pattern_total_score": 0.0,
     "attention_round": 0,
@@ -4334,6 +4335,8 @@ def reset_memory_game():
     st.session_state.memory_round = 0
     st.session_state.memory_total_score = 0.0
     st.session_state.memory_display_started_at = None
+    st.session_state.memory_timer_finished = False
+    st.session_state.memory_display_started_at = None
 
 
 def reset_pattern_game():
@@ -4628,6 +4631,7 @@ elif selected_page == "games":
                 st.session_state.memory_display_started_at = (
                     datetime.now().timestamp()
                 )
+                st.session_state.memory_timer_finished = False
 
                 queue_voice(
                     f"Memory game started. Round 1 of {total_rounds}. "
@@ -4651,119 +4655,155 @@ elif selected_page == "games":
             MEMORY_VIEW_SECONDS = 10
 
             # ------------------------------------------------
-            # SAFETY: make sure every round has a start time.
+            # Ensure every round starts in the 10-second display
+            # mode exactly once.
             # ------------------------------------------------
 
-            if st.session_state.get("memory_display_started_at") is None:
+            if st.session_state.get("memory_display_started_at") is None and not st.session_state.get("memory_timer_finished", False):
 
                 st.session_state.memory_display_started_at = (
                     datetime.now().timestamp()
                 )
 
-            elapsed_seconds = (
-                datetime.now().timestamp()
-                - float(st.session_state.memory_display_started_at)
-            )
-
             # ------------------------------------------------
-            # 10-SECOND COUNTDOWN MODE
+            # LIVE COUNTDOWN FRAGMENT
+            # ------------------------------------------------
+            # IMPORTANT: The countdown card itself is inside the
+            # fragment. Therefore it is redrawn every 0.1 seconds.
+            # The previous version only reran an invisible fragment,
+            # so the displayed "10 seconds" never changed.
             # ------------------------------------------------
 
-            if elapsed_seconds < MEMORY_VIEW_SECONDS:
+            if not st.session_state.get("memory_timer_finished", False):
 
-                remaining_seconds = max(
-                    0,
-                    math.ceil(
-                        MEMORY_VIEW_SECONDS - elapsed_seconds
+                @st.fragment(run_every=0.1)
+                def render_memory_countdown():
+
+                    started_at = st.session_state.get(
+                        "memory_display_started_at"
                     )
-                )
 
-                st.html(
-                    f"""
-                    <div style="
-                        border:3px solid #4F46E5;
-                        border-radius:20px;
-                        padding:30px 24px;
-                        text-align:center;
-                        background:linear-gradient(
-                            135deg,
-                            #EEF2FF,
-                            #F5F3FF
-                        );
-                        margin-top:15px;
-                        margin-bottom:18px;
-                        box-shadow:0 8px 25px rgba(79,70,229,0.18);
-                    ">
-
-                        <div style="
-                            font-size:20px;
-                            font-weight:800;
-                            color:#312E81;
-                            margin-bottom:22px;
-                        ">
-                            🧠 Remember these numbers
-                        </div>
-
-                        <div style="
-                            font-size:40px;
-                            font-weight:900;
-                            color:#111827;
-                            letter-spacing:8px;
-                            line-height:1.5;
-                            margin-bottom:22px;
-                        ">
-                            {" • ".join(str(number) for number in sequence)}
-                        </div>
-
-                        <div style="
-                            display:inline-block;
-                            padding:10px 22px;
-                            border-radius:999px;
-                            background:#3730A3;
-                            color:white;
-                            font-size:21px;
-                            font-weight:800;
-                        ">
-                            ⏱️ {remaining_seconds} seconds
-                        </div>
-
-                    </div>
-                    """,
-                    width="stretch"
-                )
-
-                st.info(
-                    "⏱️ The sequence is visible for exactly 10 seconds. "
-                    "The answer box and Submit button stay hidden until the timer reaches 0."
-                )
-
-                # ------------------------------------------------
-                # A fragment reruns ONLY this timer every second.
-                # This avoids blocking the Streamlit app with sleep()
-                # and does not expose the answer field early.
-                # ------------------------------------------------
-
-                @st.fragment(run_every=0.25)
-                def memory_timer_fragment():
-
-                    if st.session_state.get("memory_display_started_at") is None:
+                    if started_at is None:
                         return
 
                     elapsed = (
                         datetime.now().timestamp()
-                        - float(
-                            st.session_state.memory_display_started_at
-                        )
+                        - float(started_at)
                     )
 
-                    if elapsed >= MEMORY_VIEW_SECONDS:
+                    remaining = max(
+                        0,
+                        int(math.ceil(
+                            MEMORY_VIEW_SECONDS - elapsed
+                        ))
+                    )
 
-                        # The next full app run will render answer mode.
-                        st.rerun()
+                    # While time remains, show the numbers and
+                    # the live countdown.
+                    if remaining > 0:
 
-                memory_timer_fragment()
+                        st.html(
+                            f"""
+                            <div style="
+                                border:3px solid #4F46E5;
+                                border-radius:20px;
+                                padding:30px 24px;
+                                text-align:center;
+                                background:linear-gradient(
+                                    135deg,
+                                    #EEF2FF,
+                                    #F5F3FF
+                                );
+                                margin-top:15px;
+                                margin-bottom:18px;
+                                box-shadow:0 8px 25px rgba(79,70,229,0.18);
+                            ">
+                                <div style="
+                                    font-size:20px;
+                                    font-weight:800;
+                                    color:#312E81;
+                                    margin-bottom:18px;
+                                ">
+                                    🧠 Remember these numbers
+                                </div>
 
-                # Exit is still allowed while viewing.
+                                <div style="
+                                    font-size:40px;
+                                    font-weight:900;
+                                    color:#111827;
+                                    letter-spacing:8px;
+                                    line-height:1.5;
+                                    margin-bottom:20px;
+                                ">
+                                    {" • ".join(str(number) for number in sequence)}
+                                </div>
+
+                                <div style="
+                                    display:inline-block;
+                                    min-width:170px;
+                                    padding:11px 24px;
+                                    border-radius:999px;
+                                    background:#3730A3;
+                                    color:white;
+                                    font-size:22px;
+                                    font-weight:900;
+                                ">
+                                    ⏱️ {remaining} seconds
+                                </div>
+                            </div>
+                            """,
+                            width="stretch"
+                        )
+
+                        st.info(
+                            f"⏱️ Memorize the sequence. The numbers will disappear when the countdown reaches 0. Time remaining: **{remaining} seconds**."
+                        )
+
+                    else:
+
+                        # Freeze the state first. The next full app
+                        # rerun will enter the answer branch.
+                        st.session_state.memory_timer_finished = True
+                        st.session_state.memory_display_started_at = None
+
+                        # Show an explicit zero state before switching.
+                        st.html(
+                            """
+                            <div style="
+                                border:3px solid #DC2626;
+                                border-radius:20px;
+                                padding:28px 24px;
+                                text-align:center;
+                                background:#FEF2F2;
+                                margin-top:15px;
+                                margin-bottom:18px;
+                            ">
+                                <div style="
+                                    font-size:30px;
+                                    font-weight:900;
+                                    color:#B91C1C;
+                                ">
+                                    ⏱️ 0 seconds
+                                </div>
+                                <div style="
+                                    font-size:18px;
+                                    font-weight:800;
+                                    color:#991B1B;
+                                    margin-top:8px;
+                                ">
+                                    Numbers disappeared!
+                                </div>
+                            </div>
+                            """,
+                            width="stretch"
+                        )
+
+                        # Explicit app-scoped rerun is required here.
+                        st.rerun(scope="app")
+
+                render_memory_countdown()
+
+                # Exit is still available during the viewing period.
                 if st.button(
                     "🚪 Exit Game",
                     key=f"memory_exit_view_{current_round}",
@@ -4777,16 +4817,16 @@ elif selected_page == "games":
 
             else:
 
-                # Clear the timer timestamp so the answer screen
-                # cannot accidentally restart the countdown.
-                st.session_state.memory_display_started_at = None
+                # The timer has already finished. The sequence is
+                # intentionally NOT shown here. Only the answer box
+                # and submit button are available.
 
                 st.success(
                     "✅ Time is up! The numbers have disappeared. "
                     "Now enter the sequence in the same order."
                 )
 
-                st.markdown(
+                st.html(
                     """
                     <div style="
                         border:3px solid #16A34A;
@@ -4818,12 +4858,11 @@ elif selected_page == "games":
                         </div>
                     </div>
                     """,
-                    unsafe_allow_html=True
+                    width="stretch"
                 )
 
                 st.info(
-                    "✍️ The sequence is now hidden. "
-                    "Enter the numbers you remembered."
+                    "✍️ The sequence is now hidden. Enter the numbers you remembered."
                 )
 
                 answer = st.text_input(
@@ -4912,7 +4951,6 @@ elif selected_page == "games":
                                         )
                                     )
 
-                                    # Congratulations + difficulty notification.
                                     result_message = game_result_voice(
                                         "Memory Game",
                                         round(final_score, 1),
@@ -4921,53 +4959,32 @@ elif selected_page == "games":
                                         language
                                     )
 
-                                    st.session_state.game_result_message = result_message
-                                    st.session_state.game_result_score = round(final_score, 1)
-                                    st.session_state.game_result_old_difficulty = old_difficulty
-                                    st.session_state.game_result_new_difficulty = new_difficulty
-
                                     if final_score >= 70:
 
                                         st.success(
-                                            f"🎉 Congratulations! "
-                                            f"You completed the Memory Sequence Game "
-                                            f"with a final score of {final_score:.1f}/100."
+                                            f"🎉 Congratulations! You completed the Memory Sequence Game with a final score of {final_score:.1f}/100."
                                         )
 
                                         if new_difficulty > old_difficulty:
-
                                             st.info(
-                                                f"⬆️ Excellent performance! "
-                                                f"Difficulty increased from "
-                                                f"Level {old_difficulty} "
-                                                f"to Level {new_difficulty}."
+                                                f"⬆️ Excellent performance! Difficulty increased from Level {old_difficulty} to Level {new_difficulty}."
                                             )
-
                                         else:
-
                                             st.info(
-                                                f"🏆 Strong performance! "
-                                                f"Difficulty remains at Level {new_difficulty}."
+                                                f"🏆 Strong performance! Difficulty remains at Level {new_difficulty}."
                                             )
 
                                     else:
 
                                         st.info(
-                                            f"✅ Memory Sequence Game completed "
-                                            f"with a final score of {final_score:.1f}/100. "
-                                            "Keep practicing!"
+                                            f"✅ Memory Sequence Game completed with a final score of {final_score:.1f}/100. Keep practicing!"
                                         )
 
                                         if new_difficulty < old_difficulty:
-
                                             st.warning(
-                                                f"⬇️ Difficulty adjusted from "
-                                                f"Level {old_difficulty} "
-                                                f"to Level {new_difficulty}."
+                                                f"⬇️ Difficulty adjusted from Level {old_difficulty} to Level {new_difficulty}."
                                             )
-
                                         else:
-
                                             st.info(
                                                 f"Difficulty remains at Level {new_difficulty}."
                                             )
@@ -4977,8 +4994,12 @@ elif selected_page == "games":
                                         language
                                     )
 
-                                    reset_memory_game()
+                                    st.session_state.game_result_message = result_message
+                                    st.session_state.game_result_score = round(final_score, 1)
+                                    st.session_state.game_result_old_difficulty = old_difficulty
+                                    st.session_state.game_result_new_difficulty = new_difficulty
 
+                                    reset_memory_game()
                                     st.rerun()
 
                                 # ------------------------------------
@@ -4998,10 +5019,10 @@ elif selected_page == "games":
                                         )
                                     )
 
-                                    # Start a completely new 10-second timer.
                                     st.session_state.memory_display_started_at = (
                                         datetime.now().timestamp()
                                     )
+                                    st.session_state.memory_timer_finished = False
 
                                     st.rerun()
 
@@ -5010,7 +5031,6 @@ elif selected_page == "games":
                             st.error(
                                 "Please enter numbers only, separated by spaces or commas."
                             )
-
     # ========================================================
     # PATTERN MEMORY
     # ========================================================
