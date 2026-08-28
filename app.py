@@ -1821,6 +1821,8 @@ DEFAULT_SESSION_VALUES = {
 
     "memory_round": 0,
     "memory_total_score": 0.0,
+    "memory_start_time": None,
+    "memory_answer_phase": False,
     "pattern_round": 0,
     "pattern_total_score": 0.0,
     "attention_round": 0,
@@ -4355,6 +4357,8 @@ def reset_memory_game():
     st.session_state.memory_sequence = None
     st.session_state.memory_round = 0
     st.session_state.memory_total_score = 0.0
+    st.session_state.memory_start_time = None
+    st.session_state.memory_answer_phase = False
 
 
 def reset_pattern_game():
@@ -4818,20 +4822,39 @@ elif selected_page == "games":
         "lower performance decreases it."
     )
 
-    game_tab1, game_tab2, game_tab3, game_tab4 = st.tabs(
+    # Streamlit tabs return to the first tab after every rerun. Since the
+    # games intentionally rerun for timers, answers and next rounds, tabs
+    # can make an active game look like it returned to "Start Game". Use a
+    # persistent game selector instead. The selected game survives every
+    # rerun and each game keeps its own session state.
+    if "active_game" not in st.session_state:
+        st.session_state.active_game = "Memory Sequence"
+
+    active_game = st.radio(
+        "Choose Game",
         [
-            "🧠 Memory Sequence",
-            "🔷 Pattern Memory",
-            "⚡ Attention Game",
-            "🖼️ Image Recognition"
-        ]
+            "Memory Sequence",
+            "Pattern Memory",
+            "Attention Game",
+            "Image Recognition"
+        ],
+        key="active_game",
+        horizontal=True,
+        format_func=lambda x: {
+            "Memory Sequence": "🧠 Memory Sequence",
+            "Pattern Memory": "🔷 Pattern Memory",
+            "Attention Game": "⚡ Attention Game",
+            "Image Recognition": "🖼️ Image Recognition"
+        }[x]
     )
+
+    st.divider()
 
     # ========================================================
     # MEMORY SEQUENCE
     # ========================================================
 
-    with game_tab1:
+    if active_game == "Memory Sequence":
 
         st.subheader("🧠 Memory Sequence")
 
@@ -4854,12 +4877,15 @@ elif selected_page == "games":
                 key="memory_start"
             ):
 
+                st.session_state.active_game = "Memory Sequence"
                 st.session_state.memory_round = 1
                 st.session_state.memory_total_score = 0.0
                 st.session_state.memory_sequence = random.sample(
                     range(1, 10),
                     sequence_length
                 )
+                st.session_state.memory_start_time = pytime.time()
+                st.session_state.memory_answer_phase = False
 
                 queue_voice(
                     f"Memory game started. Round 1 of {total_rounds}. "
@@ -4881,82 +4907,57 @@ elif selected_page == "games":
             )
 
             # --------------------------------------------------------
-            # 10-SECOND MEMORY DISPLAY
+            # 10-SECOND MEMORY DISPLAY / ANSWER LOCK
             # --------------------------------------------------------
-            # The sequence is rendered in the browser and hidden exactly
-            # 10 seconds after the round is displayed. The answer is still
-            # checked against the original server-side sequence.
-            sequence_text = " • ".join(
-                str(number)
-                for number in sequence
-            )
+            # Keep the start time in session_state so Streamlit reruns do not
+            # restart the round. The answer input is disabled until 0.
+            if st.session_state.get("memory_start_time") is None:
+                st.session_state.memory_start_time = pytime.time()
+                st.session_state.memory_answer_phase = False
 
-            memory_box_id = f"memory_display_{user_id}_{current_round}"
-            memory_count_id = f"memory_countdown_{user_id}_{current_round}"
+            elapsed = pytime.time() - float(st.session_state.memory_start_time)
+            remaining = max(0, 10 - int(elapsed))
 
-            st.html(
-                f"""
-                <div id=\"{memory_box_id}\" style=\"
-                    padding:22px;
-                    border-radius:16px;
-                    text-align:center;
-                    margin:10px 0 16px 0;
-                    border:2px solid #4F46E5;
-                    background:linear-gradient(135deg,#EEF2FF,#F5F3FF);
-                ">
-                    <div style=\"font-size:17px;font-weight:600;margin-bottom:8px;\">
-                        🧠 Remember these numbers for 10 seconds
-                    </div>
-                    <div style=\"font-size:34px;font-weight:800;letter-spacing:8px;\">
-                        {sequence_text}
-                    </div>
-                    <div id=\"{memory_count_id}\" style=\"
-                        margin-top:10px;
-                        font-size:15px;
-                        font-weight:600;
-                    ">
-                        Numbers disappear in 10 seconds...
-                    </div>
-                </div>
-                <script>
-                    (function() {{
-                        const box = document.getElementById(\"{memory_box_id}\");
-                        const countdown = document.getElementById(\"{memory_count_id}\");
-                        if (!box || !countdown) return;
+            if remaining > 0:
+                st.session_state.memory_answer_phase = False
 
-                        let seconds = 10;
-                        countdown.textContent = `Numbers disappear in ${{seconds}} seconds...`;
+                st.markdown("### 👀 Memorize these numbers")
+                st.markdown(
+                    f"""<div style="padding:22px;border-radius:16px;text-align:center;
+                    border:2px solid #4F46E5;background:#EEF2FF;margin:10px 0;">
+                    <div style="font-size:36px;font-weight:800;letter-spacing:8px;">
+                    {sequence_text}</div>
+                    <div style="margin-top:12px;font-size:24px;font-weight:900;">
+                    ⏱️ {remaining}</div>
+                    <div style="font-size:14px;margin-top:5px;">
+                    Numbers will disappear when the timer reaches 0.</div>
+                    </div>""",
+                    unsafe_allow_html=True
+                )
 
-                        const timer = setInterval(function() {{
-                            seconds -= 1;
-                            if (seconds > 0) {{
-                                countdown.textContent = `Numbers disappear in ${{seconds}} seconds...`;
-                            }} else {{
-                                clearInterval(timer);
-                                box.innerHTML = `
-                                    <div style=\"font-size:20px;font-weight:700;\">
-                                        ✅ Time is up — the numbers have disappeared.
-                                    </div>
-                                    <div style=\"font-size:15px;margin-top:6px;\">
-                                        Enter the sequence from memory below.
-                                    </div>
-                                `;
-                            }}
-                        }}, 1000);
-                    }})();
-                </script>
-                """,
-                width="stretch"
-            )
+                st.info("🔒 Answer is locked until the countdown reaches 0.")
 
-            st.info(
-                "⏱️ The sequence is visible for exactly 10 seconds. "
-                "After it disappears, enter the numbers in the same order."
-            )
+                if st_autorefresh is not None:
+                    st_autorefresh(
+                        interval=250,
+                        limit=45,
+                        key=f"memory_timer_{user_id}_{current_round}"
+                    )
+                else:
+                    st.error("Install streamlit-autorefresh to run the live countdown.")
+
+            else:
+                if not st.session_state.get("memory_answer_phase", False):
+                    st.session_state.memory_answer_phase = True
+                    st.session_state.memory_start_time = None
+                    st.rerun()
+
+                st.success("✅ 0 seconds — numbers disappeared. Enter your answer now.")
 
             answer = st.text_input(
-                "Enter the numbers in the same order after the 10-second display",
-                key=f"memory_answer_{current_round}"
+                "Enter the numbers in the same order",
+                key=f"memory_answer_{current_round}",
+                disabled=not st.session_state.get("memory_answer_phase", False)
             )
 
             exit_col, submit_col = st.columns(2)
@@ -5066,6 +5067,8 @@ elif selected_page == "games":
                                     range(1, 10),
                                     sequence_length
                                 )
+                                st.session_state.memory_start_time = pytime.time()
+                                st.session_state.memory_answer_phase = False
 
                                 st.rerun()
 
@@ -5079,7 +5082,7 @@ elif selected_page == "games":
     # PATTERN MEMORY
     # ========================================================
 
-    with game_tab2:
+    if active_game == "Pattern Memory":
 
         st.subheader("🔷 Pattern Memory")
 
@@ -5109,6 +5112,7 @@ elif selected_page == "games":
                 key="pattern_start"
             ):
 
+                st.session_state.active_game = "Pattern Memory"
                 st.session_state.pattern_round = 1
                 st.session_state.pattern_total_score = 0.0
                 st.session_state.pattern_sequence = [
@@ -5256,7 +5260,7 @@ elif selected_page == "games":
     # ATTENTION GAME
     # ========================================================
 
-    with game_tab3:
+    if active_game == "Attention Game":
 
         st.subheader("⚡ Attention Game")
 
@@ -5277,6 +5281,7 @@ elif selected_page == "games":
                 key="attention_start"
             ):
 
+                st.session_state.active_game = "Attention Game"
                 st.session_state.attention_round = 1
                 st.session_state.attention_total_score = 0.0
                 st.session_state.reaction_target = random.randint(1, 9)
@@ -5388,7 +5393,7 @@ elif selected_page == "games":
     # IMAGE RECOGNITION / IMAGE MEMORY GAME
     # ========================================================
 
-    with game_tab4:
+    if active_game == "Image Recognition":
 
         st.subheader("🖼️ Image Recognition Game")
 
@@ -5430,6 +5435,7 @@ elif selected_page == "games":
                 use_container_width=True
             ):
 
+                st.session_state.active_game = "Image Recognition"
                 st.session_state.image_memory_total_score = 0.0
 
                 prepare_image_memory_round(
