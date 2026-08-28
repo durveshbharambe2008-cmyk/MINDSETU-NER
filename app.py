@@ -4908,55 +4908,80 @@ elif selected_page == "games":
             # --------------------------------------------------------
             # 10-SECOND MEMORY DISPLAY / ANSWER LOCK
             # --------------------------------------------------------
-            # Keep the start time in session_state so Streamlit reruns do not
-            # restart the round. The answer input is disabled until 0.
-            if st.session_state.get("memory_start_time") is None:
-                st.session_state.memory_start_time = pytime.time()
-                st.session_state.memory_answer_phase = False
+            # The timer is stored in session_state so every Streamlit rerun
+            # continues the SAME round instead of starting it again.
+            if not st.session_state.get("memory_answer_phase", False):
+                if st.session_state.get("memory_start_time") is None:
+                    st.session_state.memory_start_time = pytime.time()
 
-            elapsed = pytime.time() - float(st.session_state.memory_start_time)
-            remaining = max(0, 10 - int(elapsed))
+                elapsed = pytime.time() - float(st.session_state.memory_start_time)
+                remaining = max(0, 10 - int(elapsed))
 
-            # Build the display text before rendering the HTML.
-            # This fixes the NameError for sequence_text.
-            sequence_text = " • ".join(str(number) for number in sequence)
+                # IMPORTANT: create the text before displaying it.
+                sequence_text = "   •   ".join(str(number) for number in sequence)
 
-            if remaining > 0:
-                st.session_state.memory_answer_phase = False
-
-                st.markdown("### 👀 Memorize these numbers")
+                # Use normal Streamlit rendering so the numbers are clearly
+                # visible in every browser/theme.
                 st.markdown(
-                    f"""<div style="padding:22px;border-radius:16px;text-align:center;
-                    border:2px solid #4F46E5;background:#EEF2FF;margin:10px 0;">
-                    <div style="font-size:36px;font-weight:800;letter-spacing:8px;">
-                    {sequence_text}</div>
-                    <div style="margin-top:12px;font-size:24px;font-weight:900;">
-                    ⏱️ {remaining}</div>
-                    <div style="font-size:14px;margin-top:5px;">
-                    Numbers will disappear when the timer reaches 0.</div>
-                    </div>""",
+                    "<div style=\"text-align:center; font-size:20px; font-weight:700; margin-top:15px;\">"
+                    "🧠 MEMORIZE THESE NUMBERS"
+                    "</div>",
                     unsafe_allow_html=True
                 )
 
-                st.info("🔒 Answer is locked until the countdown reaches 0.")
+                st.markdown(
+                    f"<div style=\"background:#EEF2FF; border:3px solid #4F46E5; "
+                    f"border-radius:18px; padding:28px 12px; text-align:center; "
+                    f"margin:12px 0;\">"
+                    f"<div style=\"font-size:42px; font-weight:900; "
+                    f"letter-spacing:6px; color:#111827;\">{sequence_text}</div>"
+                    f"<div style=\"font-size:30px; font-weight:900; "
+                    f"margin-top:18px; color:#B91C1C;\">⏱️ {remaining}</div>"
+                    f"<div style=\"font-size:15px; margin-top:8px; color:#374151;\">"
+                    f"Numbers disappear at 0 seconds</div></div>",
+                    unsafe_allow_html=True
+                )
 
-                if st_autorefresh is not None:
-                    st_autorefresh(
-                        interval=250,
-                        limit=45,
-                        key=f"memory_timer_{user_id}_{current_round}"
-                    )
+                st.info(
+                    f"🔒 Answer locked — memorize the numbers. "
+                    f"Time remaining: **{remaining} seconds**"
+                )
+
+                if remaining > 0:
+                    if st_autorefresh is not None:
+                        st_autorefresh(
+                            interval=250,
+                            limit=50,
+                            key=f"memory_timer_{user_id}_{current_round}"
+                        )
+                    else:
+                        st.warning(
+                            "Please add **streamlit-autorefresh** to requirements.txt "
+                            "for the live countdown."
+                        )
                 else:
-                    st.error("Install streamlit-autorefresh to run the live countdown.")
-
-            else:
-                if not st.session_state.get("memory_answer_phase", False):
+                    # Switch permanently to answer phase. Do NOT clear
+                    # memory_start_time, otherwise the next rerun would
+                    # accidentally restart the 10-second timer.
                     st.session_state.memory_answer_phase = True
-                    st.session_state.memory_start_time = None
                     st.rerun()
 
-                st.success("✅ 0 seconds — numbers disappeared. Enter your answer now.")
-
+            else:
+                # --------------------------------------------------------
+                # ANSWER PHASE — numbers are hidden and input is enabled
+                # --------------------------------------------------------
+                st.markdown(
+                    "<div style=\"text-align:center; padding:22px; "
+                    "border:3px solid #16A34A; border-radius:18px; "
+                    "background:#F0FDF4; margin:12px 0;\">"
+                    "<div style=\"font-size:30px; font-weight:900; color:#15803D;\">"
+                    "⏱️ 0 — NUMBERS DISAPPEARED</div>"
+                    "<div style=\"font-size:18px; margin-top:8px;\">"
+                    "Now enter the numbers in the same order.</div>"
+                    "</div>",
+                    unsafe_allow_html=True
+                )
+                st.success("✅ Answer box is now active!")
             answer = st.text_input(
                 "Enter the numbers in the same order",
                 key=f"memory_answer_{current_round}",
