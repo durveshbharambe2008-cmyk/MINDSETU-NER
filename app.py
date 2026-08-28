@@ -4917,6 +4917,10 @@ elif selected_page == "games":
             elapsed = pytime.time() - float(st.session_state.memory_start_time)
             remaining = max(0, 10 - int(elapsed))
 
+            # Build the display text before rendering the HTML.
+            # This fixes the NameError for sequence_text.
+            sequence_text = " • ".join(str(number) for number in sequence)
+
             if remaining > 0:
                 st.session_state.memory_answer_phase = False
 
