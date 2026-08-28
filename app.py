@@ -4877,7 +4877,6 @@ elif selected_page == "games":
                 key="memory_start"
             ):
 
-                st.session_state.active_game = "Memory Sequence"
                 st.session_state.memory_round = 1
                 st.session_state.memory_total_score = 0.0
                 st.session_state.memory_sequence = random.sample(
@@ -5112,7 +5111,6 @@ elif selected_page == "games":
                 key="pattern_start"
             ):
 
-                st.session_state.active_game = "Pattern Memory"
                 st.session_state.pattern_round = 1
                 st.session_state.pattern_total_score = 0.0
                 st.session_state.pattern_sequence = [
@@ -5281,7 +5279,6 @@ elif selected_page == "games":
                 key="attention_start"
             ):
 
-                st.session_state.active_game = "Attention Game"
                 st.session_state.attention_round = 1
                 st.session_state.attention_total_score = 0.0
                 st.session_state.reaction_target = random.randint(1, 9)
@@ -5435,7 +5432,6 @@ elif selected_page == "games":
                 use_container_width=True
             ):
 
-                st.session_state.active_game = "Image Recognition"
                 st.session_state.image_memory_total_score = 0.0
 
                 prepare_image_memory_round(
