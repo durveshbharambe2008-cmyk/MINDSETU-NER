@@ -1,5 +1,5 @@
 # ============================================================
-# MINDSETU NER - COMPLETE VOICE-FIRST STREAMLIT APP
+# SMRITISETU - COMPLETE VOICE-FIRST STREAMLIT APP
 # ============================================================
 #
 # FEATURES
@@ -126,12 +126,20 @@ except ImportError:
 
 
 # ============================================================
+# SMRITISETU BRANDING
+# ============================================================
+# Keep the logo file in the same folder as app.py.
+APP_NAME = "SMRITISETU"
+APP_LOGO_PATH = Path(__file__).resolve().parent / "smritisetu_logo.jpeg"
+
+
+# ============================================================
 # PAGE CONFIG
 # ============================================================
 
 st.set_page_config(
-    page_title="MINDSETU NER",
-    page_icon="🧠",
+    page_title=APP_NAME,
+    page_icon=str(APP_LOGO_PATH) if APP_LOGO_PATH.exists() else "🧠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -401,8 +409,8 @@ def build_patient_progress_pdf(patient_id):
         leftMargin=16 * mm,
         topMargin=16 * mm,
         bottomMargin=16 * mm,
-        title="MINDSETU NER Cognitive Progress Report",
-        author="MINDSETU NER",
+        title="SMRITISETU Cognitive Progress Report",
+        author="SMRITISETU",
     )
 
     styles = getSampleStyleSheet()
@@ -480,7 +488,7 @@ def build_patient_progress_pdf(patient_id):
     header_table = Table([
         [
             [
-                Paragraph("MINDSETU NER COGNITIVE HEALTH PLATFORM", styles["ReportTitle"]),
+                Paragraph("SMRITISETU COGNITIVE HEALTH PLATFORM", styles["ReportTitle"]),
                 Paragraph("Cognitive wellness and longitudinal performance report", styles["ReportSubtitle"]),
                 Paragraph("Clinical-style summary generated from application data", styles["ReportSubtitle"]),
             ],
@@ -495,7 +503,7 @@ def build_patient_progress_pdf(patient_id):
     header_table = Table([
         [
             [
-                Paragraph("MINDSETU NER COGNITIVE HEALTH PLATFORM", styles["ReportTitle"]),
+                Paragraph("SMRITISETU COGNITIVE HEALTH PLATFORM", styles["ReportTitle"]),
                 Paragraph("Cognitive wellness and longitudinal performance report", styles["ReportSubtitle"]),
                 Paragraph("Clinical-style summary generated from application data", styles["ReportSubtitle"]),
             ],
@@ -833,7 +841,7 @@ def build_patient_progress_pdf(patient_id):
     story.append(Spacer(1, 7 * mm))
     footer_table = Table([
         [
-            Paragraph("MINDSETU NER", styles["BodySmall"]),
+            Paragraph("SMRITISETU", styles["BodySmall"]),
             Paragraph(
                 "Generated from application data. For demonstration and educational purposes only. "
                 "This report does not provide a medical diagnosis.",
@@ -852,7 +860,7 @@ def build_patient_progress_pdf(patient_id):
         canvas.saveState()
         canvas.setFont("Helvetica", 6.5)
         canvas.setFillColor(colors.HexColor("#718096"))
-        canvas.drawString(16 * mm, 8 * mm, "MINDSETU NER | Cognitive Progress Report")
+        canvas.drawString(16 * mm, 8 * mm, "SMRITISETU | Cognitive Progress Report")
         canvas.drawRightString(194 * mm, 8 * mm, f"Page {doc_obj.page}")
         canvas.restoreState()
 
@@ -1102,7 +1110,7 @@ def make_id_card_pdf(person_id, role_name):
                             rightMargin=5*mm, leftMargin=5*mm,
                             topMargin=5*mm, bottomMargin=5*mm)
     styles = getSampleStyleSheet()
-    story = [Paragraph("<b>MINDSETU NER</b>", styles["Title"]),
+    story = [Paragraph("<b>SMRITISETU</b>", styles["Title"]),
              Paragraph(f"<b>{role_name.title()} Identity Card</b>", styles["Heading3"])]
     photo_text = "Photo: Uploaded" if row[10] else "Photo: Not uploaded"
     story += [Paragraph(f"<b>Name:</b> {safe_pdf_text(row[1])}", styles["BodyText"]),
@@ -1135,7 +1143,7 @@ def make_treatment_certificate_pdf(certificate_id):
     styles = getSampleStyleSheet()
     title = ParagraphStyle("CertTitle", parent=styles["Title"], alignment=TA_CENTER, fontSize=20, leading=24)
     body = ParagraphStyle("CertBody", parent=styles["BodyText"], fontSize=11, leading=17)
-    story=[Paragraph("MINDSETU NER", title), Spacer(1,8*mm),
+    story=[Paragraph("SMRITISETU", title), Spacer(1,8*mm),
            Paragraph("<b>MEDICAL TREATMENT CERTIFICATE</b>", title), Spacer(1,10*mm),
            Paragraph(f"This is to certify that <b>{safe_pdf_text(cert[6])}</b> has completed the treatment/care described below.", body),
            Spacer(1,5*mm),
@@ -1146,7 +1154,7 @@ def make_treatment_certificate_pdf(certificate_id):
            Paragraph(f"<b>Doctor:</b> Dr. {safe_pdf_text(cert[7])}", body),
            Paragraph(f"<b>Caretaker/Nurse:</b> {safe_pdf_text(cert[8] or 'Not assigned')}", body),
            Spacer(1,12*mm), Paragraph(f"<b>Issued:</b> {safe_pdf_text(cert[5])}", body),
-           Spacer(1,10*mm), Paragraph("This certificate is generated by the MINDSETU NER application and should be verified with the treating institution when required.", styles["Italic"])]
+           Spacer(1,10*mm), Paragraph("This certificate is generated by the SMRITISETU application and should be verified with the treating institution when required.", styles["Italic"])]
     doc.build(story)
     return buf.getvalue()
 
@@ -2006,9 +2014,13 @@ if st.session_state.logged_in:
 if not st.session_state.logged_in:
 
     # Login / registration starts directly here.
+    # The supplied SMRITISETU logo is shown at the top of the welcome screen.
+    if APP_LOGO_PATH.exists():
+        st.image(str(APP_LOGO_PATH), width=220)
+    st.markdown(f"# {APP_NAME}")
 
     st.info(
-        "MINDSETU NER is a prototype for "
+        f"{APP_NAME} is a prototype for "
         "cognitive wellness and performance tracking. "
         "It is not a medical diagnostic system."
     )
@@ -2614,6 +2626,17 @@ user_id = st.session_state.user_id
 name = st.session_state.name
 language = st.session_state.language
 
+# ============================================================
+# APP BRANDING HEADER FOR LOGGED-IN USERS
+# ============================================================
+brand_col1, brand_col2 = st.columns([1, 6])
+with brand_col1:
+    if APP_LOGO_PATH.exists():
+        st.image(str(APP_LOGO_PATH), width=105)
+with brand_col2:
+    st.markdown(f"# {APP_NAME}")
+    st.caption("Bridging Memory, Care & Connection")
+
 
 # ============================================================
 # ADMIN DASHBOARD
@@ -2622,7 +2645,7 @@ language = st.session_state.language
 if role == "admin":
 
     st.title(
-        "👑 MINDSETU NER — Administrator Dashboard"
+        "👑 SMRITISETU — Administrator Dashboard"
     )
 
     admin_tabs = st.tabs(
@@ -4137,8 +4160,10 @@ def command_matches(command, action):
 
 with st.sidebar:
 
+    if APP_LOGO_PATH.exists():
+        st.image(str(APP_LOGO_PATH), width=155)
     st.markdown(
-        "## 🧠 MINDSETU NER"
+        f"## 🧠 {APP_NAME}"
     )
 
     st.write(
@@ -6340,7 +6365,7 @@ elif selected_page == "reports":
     st.subheader("🧾 Cognitive Progress Report")
     st.caption(
         "This report uses the same sectioned, professional visual style as the "
-        "reference document, but only includes data available in MINDSETU NER."
+        "reference document, but only includes data available in SMRITISETU."
     )
 
     if REPORTLAB_AVAILABLE:
@@ -6354,7 +6379,7 @@ elif selected_page == "reports":
                 "⬇️ Download Cognitive Progress Report PDF",
                 data=clinical_pdf,
                 file_name=(
-                    f"MINDSETU_NER_Cognitive_Report_"
+                    f"SMRITISETU_Cognitive_Report_"
                     f"{username}.pdf"
                 ),
                 mime="application/pdf",
@@ -6447,7 +6472,7 @@ elif selected_page == "reports":
 st.divider()
 
 st.caption(
-    "🧠 MINDSETU NER | Cognitive Wellness Prototype"
+    f"🧠 {APP_NAME} | Cognitive Wellness Prototype"
 )
 
 st.caption(
