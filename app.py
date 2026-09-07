@@ -69,6 +69,7 @@ import re
 import base64
 import textwrap
 from pathlib import Path
+from PIL import Image
 import pandas as pd
 
 from datetime import datetime, date, time
@@ -128,9 +129,28 @@ except ImportError:
 # ============================================================
 # SMRITISETU BRANDING
 # ============================================================
-# Keep the logo file in the same folder as app.py.
+# Keep smritisetu_logo.png in the same folder as app.py on GitHub/Streamlit Cloud.
+# PNG is used first because it is more reliable for Streamlit page images.
 APP_NAME = "SMRITISETU"
-APP_LOGO_PATH = Path(__file__).resolve().parent / "smritisetu_logo.jpeg"
+APP_DIR = Path(__file__).resolve().parent
+APP_LOGO_PNG = APP_DIR / "smritisetu_logo.png"
+APP_LOGO_JPEG = APP_DIR / "smritisetu_logo.jpeg"
+
+
+def load_app_logo():
+    """Safely load the SMRITISETU logo without crashing the app if a file is missing/corrupt."""
+    for logo_path in (APP_LOGO_PNG, APP_LOGO_JPEG):
+        if logo_path.exists():
+            try:
+                with Image.open(logo_path) as img:
+                    img.load()
+                    return img.copy()
+            except Exception:
+                continue
+    return None
+
+
+APP_LOGO = load_app_logo()
 
 
 # ============================================================
@@ -139,7 +159,7 @@ APP_LOGO_PATH = Path(__file__).resolve().parent / "smritisetu_logo.jpeg"
 
 st.set_page_config(
     page_title=APP_NAME,
-    page_icon=str(APP_LOGO_PATH) if APP_LOGO_PATH.exists() else "🧠",
+    page_icon=APP_LOGO if APP_LOGO is not None else "🧠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -2015,8 +2035,10 @@ if not st.session_state.logged_in:
 
     # Login / registration starts directly here.
     # The supplied SMRITISETU logo is shown at the top of the welcome screen.
-    if APP_LOGO_PATH.exists():
-        st.image(str(APP_LOGO_PATH), width=220)
+    logo_col_left, logo_col_center, logo_col_right = st.columns([1, 2, 1])
+    with logo_col_center:
+        if APP_LOGO is not None:
+            st.image(APP_LOGO, width=220)
     st.markdown(f"# {APP_NAME}")
 
     st.info(
@@ -2631,8 +2653,8 @@ language = st.session_state.language
 # ============================================================
 brand_col1, brand_col2 = st.columns([1, 6])
 with brand_col1:
-    if APP_LOGO_PATH.exists():
-        st.image(str(APP_LOGO_PATH), width=105)
+    if APP_LOGO is not None:
+        st.image(APP_LOGO, width=105)
 with brand_col2:
     st.markdown(f"# {APP_NAME}")
     st.caption("Bridging Memory, Care & Connection")
@@ -4160,8 +4182,8 @@ def command_matches(command, action):
 
 with st.sidebar:
 
-    if APP_LOGO_PATH.exists():
-        st.image(str(APP_LOGO_PATH), width=155)
+    if APP_LOGO is not None:
+        st.image(APP_LOGO, width=155)
     st.markdown(
         f"## 🧠 {APP_NAME}"
     )
