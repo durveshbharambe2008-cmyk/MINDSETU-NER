@@ -2090,11 +2090,8 @@ if st.session_state.logged_in:
 if not st.session_state.logged_in:
 
     # Login / registration starts directly here.
-    # The supplied SMRITISETU logo is shown at the top of the welcome screen.
-    logo_col_left, logo_col_center, logo_col_right = st.columns([1, 2, 1])
-    with logo_col_center:
-        if APP_LOGO is not None:
-            st.image(APP_LOGO, width=220)
+    # The logo is intentionally NOT displayed in the center of this page.
+    # The SMRITISETU logo remains in the top-right replacement toolbar.
     st.markdown(f"# {APP_NAME}")
 
     st.info(
