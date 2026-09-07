@@ -165,6 +165,62 @@ st.set_page_config(
 )
 
 
+# ============================================================
+# HIDE STREAMLIT CLOUD TOOLBAR + SHOW SMRITISETU LOGO THERE
+# ============================================================
+# The Share / star / edit / GitHub / menu controls are Streamlit's
+# hosting toolbar, not part of the SMRITISETU application.  Hide the
+# toolbar and place the SMRITISETU logo in the same top-right area.
+
+st.markdown(
+    """
+    <style>
+        /* Hide Streamlit's top-right hosting toolbar */
+        div[data-testid="stToolbar"],
+        div[data-testid="stAppToolbar"],
+        div[data-testid="stHeaderActionElements"] {
+            display: none !important;
+            visibility: hidden !important;
+            opacity: 0 !important;
+            height: 0 !important;
+            width: 0 !important;
+            pointer-events: none !important;
+        }
+
+        /* Keep the normal Streamlit header background but remove its
+           interactive controls. */
+        header[data-testid="stHeader"] {
+            background: transparent !important;
+        }
+
+        /* Our replacement logo in the top-right corner */
+        .smritisetu-top-logo {
+            position: fixed;
+            top: 8px;
+            right: 16px;
+            width: 58px;
+            height: 58px;
+            object-fit: contain;
+            border-radius: 50%;
+            z-index: 999999;
+            background: white;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+if APP_LOGO is not None:
+    _logo_buffer = io.BytesIO()
+    APP_LOGO.save(_logo_buffer, format="PNG")
+    _logo_b64 = base64.b64encode(_logo_buffer.getvalue()).decode("utf-8")
+    st.markdown(
+        f'<img class="smritisetu-top-logo" src="data:image/png;base64,{_logo_b64}" alt="SMRITISETU logo">',
+        unsafe_allow_html=True
+    )
+
+
 
 # ============================================================
 # CLINICAL-STYLE PROGRESS REPORT PDF
