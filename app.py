@@ -68,6 +68,7 @@ import io
 import re
 import base64
 import textwrap
+from pathlib import Path
 import pandas as pd
 
 from datetime import datetime, date, time
@@ -863,7 +864,14 @@ def build_patient_progress_pdf(patient_id):
 # DATABASE
 # ============================================================
 
-DB_NAME = "mindsetu_ner.db"
+# Persistent database location.
+# Keeps the SQLite file in a dedicated data folder instead of relying on the
+# process working directory. This prevents accidental creation of multiple
+# database files when Streamlit is launched from different directories.
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_NAME = str(DATA_DIR / "mindsetu_ner.db")
 
 
 def get_connection():
@@ -874,6 +882,11 @@ def get_connection():
     )
 
     connection.execute("PRAGMA foreign_keys = ON")
+    # Performance/reliability settings for SQLite under Streamlit reruns.
+    connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA synchronous = NORMAL")
+    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute("PRAGMA temp_store = MEMORY")
 
     # --------------------------------------------------------
     # KEEP ORIGINAL USERS TABLE + ADD PROVIDER ONBOARDING FIELDS
@@ -1012,6 +1025,18 @@ def get_connection():
         SET created_at=datetime('now')
         WHERE created_at IS NULL OR TRIM(created_at)=''
     """)
+
+    # Index columns used frequently by login, dashboards and assignments.
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_users_doctor_id ON users(doctor_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_users_caretaker_id ON users(caretaker_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_reports_patient_id ON reports(patient_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_reports_doctor_id ON reports(doctor_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user_id ON reminders(user_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_cert_patient_id ON treatment_certificates(patient_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_cert_doctor_id ON treatment_certificates(doctor_id)")
 
     connection.commit()
 
