@@ -6265,7 +6265,10 @@ elif selected_page == "games":
 
         tracker_rounds = {1: 10, 2: 15, 3: 20}[difficulty]
         tracker_size = {1: 4, 2: 5, 3: 6}[difficulty]
-        target_duration = {1: 3.0, 2: 2.5, 3: 2.0}[difficulty]
+        # Target is visible for exactly 2 seconds at every difficulty level.
+        # The autorefresh below updates the timer and removes the target when
+        # the 2-second visibility window expires.
+        target_duration = 2.0
 
         if not st.session_state.tracker_running:
             if st.button("▶️ Start Target Tracker", type="primary", use_container_width=True):
