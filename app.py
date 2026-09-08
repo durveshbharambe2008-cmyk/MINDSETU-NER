@@ -67,6 +67,7 @@ import hashlib
 import io
 import re
 import base64
+import math
 import textwrap
 from pathlib import Path
 from PIL import Image
