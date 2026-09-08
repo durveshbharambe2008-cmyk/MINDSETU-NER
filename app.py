@@ -172,7 +172,7 @@ st.set_page_config(
 # hosting toolbar, not part of the SMRITISETU application.  Hide the
 # toolbar and place the SMRITISETU logo in the same top-right area.
 
-st.markdown(
+st.html(
     """
     <style>
         /* Hide Streamlit's top-right hosting toolbar */
@@ -215,7 +215,7 @@ if APP_LOGO is not None:
     _logo_buffer = io.BytesIO()
     APP_LOGO.save(_logo_buffer, format="PNG")
     _logo_b64 = base64.b64encode(_logo_buffer.getvalue()).decode("utf-8")
-    st.markdown(
+    st.html(
         f'<img class="smritisetu-top-logo" src="data:image/png;base64,{_logo_b64}" alt="SMRITISETU logo">',
         unsafe_allow_html=True
     )
@@ -4977,7 +4977,7 @@ if selected_page == "home":
         """
     )
 
-    st.markdown(
+    st.html(
         home_html,
         unsafe_allow_html=True
     )
@@ -5245,14 +5245,14 @@ elif selected_page == "games":
 
                 # Use normal Streamlit rendering so the numbers are clearly
                 # visible in every browser/theme.
-                st.markdown(
+                st.html(
                     "<div style=\"text-align:center; font-size:20px; font-weight:700; margin-top:15px;\">"
                     "🧠 MEMORIZE THESE NUMBERS"
                     "</div>",
                     unsafe_allow_html=True
                 )
 
-                st.markdown(
+                st.html(
                     f"<div style=\"background:#EEF2FF; border:3px solid #4F46E5; "
                     f"border-radius:18px; padding:28px 12px; text-align:center; "
                     f"margin:12px 0;\">"
@@ -5293,7 +5293,7 @@ elif selected_page == "games":
                 # --------------------------------------------------------
                 # ANSWER PHASE — numbers are hidden and input is enabled
                 # --------------------------------------------------------
-                st.markdown(
+                st.html(
                     "<div style=\"text-align:center; padding:22px; "
                     "border:3px solid #16A34A; border-radius:18px; "
                     "background:#F0FDF4; margin:12px 0;\">"
@@ -5831,12 +5831,12 @@ elif selected_page == "games":
                     "### 👀 Memorize these images"
                 )
 
-                st.markdown(
+                st.html(
                     render_image_cards(target_images),
                     unsafe_allow_html=True
                 )
 
-                st.markdown(
+                st.html(
                     image_countdown_banner(remaining),
                     unsafe_allow_html=True
                 )
@@ -5873,7 +5873,7 @@ elif selected_page == "games":
 
                     st.rerun()
 
-                st.markdown(
+                st.html(
                     image_countdown_banner(0),
                     unsafe_allow_html=True
                 )
@@ -5895,7 +5895,7 @@ elif selected_page == "games":
 
                     with choice_columns[index % 4]:
 
-                        st.markdown(
+                        st.html(
                             render_image_cards(
                                 [image_key],
                                 compact=True
