@@ -165,62 +165,6 @@ st.set_page_config(
 )
 
 
-# ============================================================
-# HIDE STREAMLIT CLOUD TOOLBAR + SHOW SMRITISETU LOGO THERE
-# ============================================================
-# The Share / star / edit / GitHub / menu controls are Streamlit's
-# hosting toolbar, not part of the SMRITISETU application.  Hide the
-# toolbar and place the SMRITISETU logo in the same top-right area.
-
-st.markdown(
-    """
-    <style>
-        /* Hide Streamlit's top-right hosting toolbar */
-        div[data-testid="stToolbar"],
-        div[data-testid="stAppToolbar"],
-        div[data-testid="stHeaderActionElements"] {
-            display: none !important;
-            visibility: hidden !important;
-            opacity: 0 !important;
-            height: 0 !important;
-            width: 0 !important;
-            pointer-events: none !important;
-        }
-
-        /* Keep the normal Streamlit header background but remove its
-           interactive controls. */
-        header[data-testid="stHeader"] {
-            background: transparent !important;
-        }
-
-        /* Our replacement logo in the top-right corner */
-        .smritisetu-top-logo {
-            position: fixed;
-            top: 8px;
-            right: 16px;
-            width: 58px;
-            height: 58px;
-            object-fit: contain;
-            border-radius: 50%;
-            z-index: 999999;
-            background: white;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.25);
-        }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-if APP_LOGO is not None:
-    _logo_buffer = io.BytesIO()
-    APP_LOGO.save(_logo_buffer, format="PNG")
-    _logo_b64 = base64.b64encode(_logo_buffer.getvalue()).decode("utf-8")
-    st.markdown(
-        f'<img class="smritisetu-top-logo" src="data:image/png;base64,{_logo_b64}" alt="SMRITISETU logo">',
-        unsafe_allow_html=True
-    )
-
-
 
 # ============================================================
 # CLINICAL-STYLE PROGRESS REPORT PDF
@@ -2059,7 +2003,29 @@ DEFAULT_SESSION_VALUES = {
     "game_result_score": None,
     "game_result_old_difficulty": None,
     "game_result_new_difficulty": None,
-    "selected_certificate_id": None
+    "selected_certificate_id": None,
+    "schulte_running": False,
+    "schulte_grid": [],
+    "schulte_next": 1,
+    "schulte_start_time": None,
+    "schulte_errors": 0,
+    "schulte_round": 0,
+    "spot_running": False,
+    "spot_grid_left": [],
+    "spot_grid_right": [],
+    "spot_difference": None,
+    "spot_choice": None,
+    "spot_round": 0,
+    "hidden_running": False,
+    "hidden_targets": [],
+    "hidden_found": [],
+    "hidden_round": 0,
+    "tracker_running": False,
+    "tracker_size": 4,
+    "tracker_round": 0,
+    "tracker_hits": 0,
+    "tracker_target_pos": None,
+    "tracker_target_start": None,
 }
 
 
@@ -2072,35 +2038,6 @@ for key, value in DEFAULT_SESSION_VALUES.items():
 # Backward-compatible image choice state for existing sessions.
 if "image_memory_choices" not in st.session_state:
     st.session_state.image_memory_choices = []
-
-# Additional attention-game state
-EXTRA_GAME_DEFAULTS = {
-    "schulte_round": 0,
-    "schulte_running": False,
-    "schulte_grid": [],
-    "schulte_next": 1,
-    "schulte_start_time": None,
-    "schulte_errors": 0,
-    "spot_round": 0,
-    "spot_running": False,
-    "spot_grid_left": [],
-    "spot_grid_right": [],
-    "spot_difference": None,
-    "spot_choice": None,
-    "hidden_round": 0,
-    "hidden_running": False,
-    "hidden_grid": [],
-    "hidden_targets": [],
-    "hidden_selected": [],
-    "tracker_round": 0,
-    "tracker_hits": 0,
-    "tracker_running": False,
-    "tracker_target_pos": None,
-    "tracker_target_start": None,
-}
-for _key, _value in EXTRA_GAME_DEFAULTS.items():
-    if _key not in st.session_state:
-        st.session_state[_key] = _value
 
 
 # ============================================================
@@ -2119,8 +2056,7 @@ if st.session_state.logged_in:
 if not st.session_state.logged_in:
 
     # Login / registration starts directly here.
-    # The logo is intentionally NOT displayed in the center of this page.
-    # The SMRITISETU logo remains in the top-right replacement toolbar.
+    # The large center logo is intentionally not shown.
     st.markdown(f"# {APP_NAME}")
 
     st.info(
@@ -4736,6 +4672,40 @@ def reset_image_memory_game():
     st.session_state.image_memory_selected = []
 
 
+def reset_schulte_game():
+    st.session_state.schulte_running = False
+    st.session_state.schulte_grid = []
+    st.session_state.schulte_next = 1
+    st.session_state.schulte_start_time = None
+    st.session_state.schulte_errors = 0
+    st.session_state.schulte_round = 0
+
+
+def reset_spot_game():
+    st.session_state.spot_running = False
+    st.session_state.spot_grid_left = []
+    st.session_state.spot_grid_right = []
+    st.session_state.spot_difference = None
+    st.session_state.spot_choice = None
+    st.session_state.spot_round = 0
+
+
+def reset_hidden_game():
+    st.session_state.hidden_running = False
+    st.session_state.hidden_targets = []
+    st.session_state.hidden_found = []
+    st.session_state.hidden_round = 0
+
+
+def reset_tracker_game():
+    st.session_state.tracker_running = False
+    st.session_state.tracker_size = 4
+    st.session_state.tracker_round = 0
+    st.session_state.tracker_hits = 0
+    st.session_state.tracker_target_pos = None
+    st.session_state.tracker_target_start = None
+
+
 def exit_current_game(game_name):
     if game_name == "Memory Sequence":
         reset_memory_game()
@@ -4746,15 +4716,13 @@ def exit_current_game(game_name):
     elif game_name == "Image Recognition":
         reset_image_memory_game()
     elif game_name == "Schulte Table":
-        st.session_state.schulte_running = False
-        st.session_state.schulte_grid = []
-        st.session_state.schulte_next = 1
+        reset_schulte_game()
     elif game_name == "Spot the Difference":
-        st.session_state.spot_running = False
+        reset_spot_game()
     elif game_name == "Hidden Object Search":
-        st.session_state.hidden_running = False
+        reset_hidden_game()
     elif game_name == "Target Tracker":
-        st.session_state.tracker_running = False
+        reset_tracker_game()
 
     queue_voice(
         f"You exited the {game_name}. The unfinished game was not saved.",
@@ -4987,298 +4955,6 @@ def save_image_game_result(final_score, old_difficulty, new_difficulty):
     st.session_state.game_result_score = rounded_score
     st.session_state.game_result_old_difficulty = old_difficulty
     st.session_state.game_result_new_difficulty = new_difficulty
-
-
-# ========================================================
-# SCHULTE TABLE
-# ========================================================
-
-    if active_game == "Schulte Table":
-
-        st.subheader("🔢 Schulte Table")
-        st.write(
-            "Tap numbers from 1 upward as quickly as possible. "
-            "For training, keep your gaze anchored near the center square "
-            "and use peripheral vision to locate the next number."
-        )
-
-        schulte_size = {1: 5, 2: 6, 3: 7}[difficulty]
-        schulte_total = schulte_size * schulte_size
-
-        if not st.session_state.schulte_running:
-            st.info(
-                f"Level {difficulty}: {schulte_size}×{schulte_size} table "
-                f"with {schulte_total} numbers. Your time starts on Start."
-            )
-            if st.button("▶️ Start Schulte Table", type="primary", use_container_width=True):
-                nums = list(range(1, schulte_total + 1))
-                random.shuffle(nums)
-                st.session_state.schulte_grid = nums
-                st.session_state.schulte_next = 1
-                st.session_state.schulte_start_time = pytime.time()
-                st.session_state.schulte_errors = 0
-                st.session_state.schulte_running = True
-                st.rerun()
-        else:
-            elapsed = pytime.time() - float(st.session_state.schulte_start_time or pytime.time())
-            st.metric("Time", f"{elapsed:.1f} seconds")
-            st.caption(f"Find: **{st.session_state.schulte_next}**  | Errors: {st.session_state.schulte_errors}")
-
-            grid = st.session_state.schulte_grid
-            for r in range(schulte_size):
-                cols = st.columns(schulte_size)
-                for c in range(schulte_size):
-                    idx = r * schulte_size + c
-                    number = grid[idx]
-                    with cols[c]:
-                        if st.button(str(number), key=f"schulte_{st.session_state.schulte_next}_{idx}", use_container_width=True):
-                            if number == st.session_state.schulte_next:
-                                if number == schulte_total:
-                                    final_time = pytime.time() - float(st.session_state.schulte_start_time)
-                                    # Faster completion produces a higher score.
-                                    expected = 45 + (difficulty - 1) * 20
-                                    score = max(0.0, min(100.0, 100 - max(0, final_time - expected) * 1.8 - st.session_state.schulte_errors * 3))
-                                    old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
-                                    save_completed_game("Schulte Table", score)
-                                    st.session_state.game_result_message = game_result_voice("Schulte Table", score, old_d, new_d, language)
-                                    st.session_state.game_result_score = round(score, 1)
-                                    st.session_state.game_result_old_difficulty = old_d
-                                    st.session_state.game_result_new_difficulty = new_d
-                                    st.session_state.schulte_running = False
-                                    st.session_state.schulte_round = 0
-                                    st.success(f"🎉 Schulte Table completed in {final_time:.1f} seconds. Score: {score:.1f}/100")
-                                else:
-                                    st.session_state.schulte_next += 1
-                                    st.rerun()
-                            else:
-                                st.session_state.schulte_errors += 1
-                                st.warning(f"Try again — next number is {st.session_state.schulte_next}.")
-
-            if st.button("⏹️ Exit Schulte Table"):
-                st.session_state.schulte_running = False
-                st.rerun()
-
-
-# ========================================================
-# SPOT THE DIFFERENCE
-# ========================================================
-
-    if active_game == "Spot the Difference":
-
-        st.subheader("🔍 Spot the Difference")
-        st.write(
-            "Compare the two illustrations and identify the one changed location. "
-            "Look carefully for a tiny visual detail such as a missing, added, "
-            "or changed object."
-        )
-
-        spot_size = {1: 4, 2: 5, 3: 6}[difficulty]
-        spot_items = ["🏠", "🌳", "☀️", "🚗", "🌸", "🐶", "📚", "☁️", "🪟", "🪴"]
-
-        if not st.session_state.spot_running:
-            if st.button("▶️ Start Spot the Difference", type="primary", use_container_width=True):
-                base = [random.choice(spot_items) for _ in range(spot_size * spot_size)]
-                diff = random.randrange(len(base))
-                right = base.copy()
-                alternatives = [x for x in spot_items if x != base[diff]]
-                right[diff] = random.choice(alternatives)
-                st.session_state.spot_grid_left = base
-                st.session_state.spot_grid_right = right
-                st.session_state.spot_difference = diff
-                st.session_state.spot_choice = None
-                st.session_state.spot_running = True
-                st.session_state.spot_round += 1
-                st.rerun()
-        else:
-            left = st.session_state.spot_grid_left
-            right = st.session_state.spot_grid_right
-            st.markdown("**Left illustration**      **Right illustration**")
-            for r in range(spot_size):
-                lcols = st.columns(spot_size)
-                for c in range(spot_size):
-                    idx = r * spot_size + c
-                    with lcols[c]:
-                        st.markdown(f"<div style='font-size:30px;text-align:center;padding:8px'>{left[idx]}</div>", unsafe_allow_html=True)
-            st.write("")
-            for r in range(spot_size):
-                rcols = st.columns(spot_size)
-                for c in range(spot_size):
-                    idx = r * spot_size + c
-                    with rcols[c]:
-                        st.markdown(f"<div style='font-size:30px;text-align:center;padding:8px'>{right[idx]}</div>", unsafe_allow_html=True)
-
-            choice = st.selectbox(
-                "Which cell is different?",
-                list(range(1, spot_size * spot_size + 1)),
-                key=f"spot_select_{st.session_state.spot_round}"
-            )
-            if st.button("✅ Check Difference", type="primary", use_container_width=True):
-                chosen_idx = choice - 1
-                if chosen_idx == st.session_state.spot_difference:
-                    score = 100.0
-                    st.success("🎉 Correct! You found the difference.")
-                else:
-                    score = 0.0
-                    st.error(f"Not quite. The difference was at cell {st.session_state.spot_difference + 1}.")
-
-                old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
-                save_completed_game("Spot the Difference", score)
-                st.session_state.game_result_message = game_result_voice("Spot the Difference", score, old_d, new_d, language)
-                st.session_state.game_result_score = round(score, 1)
-                st.session_state.game_result_old_difficulty = old_d
-                st.session_state.game_result_new_difficulty = new_d
-                st.session_state.spot_running = False
-
-            if st.button("⏹️ Exit Spot the Difference"):
-                st.session_state.spot_running = False
-                st.rerun()
-
-
-# ========================================================
-# HIDDEN OBJECT SEARCH
-# ========================================================
-
-    if active_game == "Hidden Object Search":
-
-        st.subheader("🕵️ Hidden Object Search")
-        st.write(
-            "Find the requested objects inside the cluttered visual field. "
-            "Use the checklist to filter visual clutter and maintain prolonged focus."
-        )
-
-        hidden_size = {1: 5, 2: 6, 3: 7}[difficulty]
-        hidden_pool = ["🍎", "📚", "🚗", "🐶", "🌸", "🏠", "🌙", "🦜", "✏️", "📱", "☀️", "🌳", "⚽", "📷", "☂️"]
-        hidden_labels = {"🍎":"Apple", "📚":"Book", "🚗":"Car", "🐶":"Dog", "🌸":"Flower", "🏠":"House", "🌙":"Moon", "🦜":"Parrot", "✏️":"Pencil", "📱":"Phone", "☀️":"Sun", "🌳":"Tree", "⚽":"Ball", "📷":"Camera", "☂️":"Umbrella"}
-        target_count = {1: 3, 2: 4, 3: 5}[difficulty]
-
-        if not st.session_state.hidden_running:
-            if st.button("▶️ Start Hidden Object Search", type="primary", use_container_width=True):
-                targets = random.sample(hidden_pool, target_count)
-                clutter = [random.choice(hidden_pool) for _ in range(hidden_size * hidden_size - target_count)]
-                grid = targets + clutter
-                random.shuffle(grid)
-                st.session_state.hidden_targets = targets
-                st.session_state.hidden_grid = grid
-                st.session_state.hidden_selected = []
-                st.session_state.hidden_running = True
-                st.session_state.hidden_round += 1
-                st.rerun()
-        else:
-            targets = st.session_state.hidden_targets
-            st.markdown("**Find these:** " + "  •  ".join(f"{x} {hidden_labels[x]}" for x in targets))
-            grid = st.session_state.hidden_grid
-            for r in range(hidden_size):
-                cols = st.columns(hidden_size)
-                for c in range(hidden_size):
-                    idx = r * hidden_size + c
-                    with cols[c]:
-                        st.markdown(f"<div style='font-size:30px;text-align:center;padding:8px;background:#f8fafc;border-radius:10px'>{grid[idx]}</div>", unsafe_allow_html=True)
-
-            selected = st.multiselect(
-                "Select the objects you found",
-                options=sorted(hidden_pool, key=lambda x: hidden_labels[x]),
-                format_func=lambda x: f"{x} {hidden_labels[x]}",
-                key=f"hidden_select_{st.session_state.hidden_round}"
-            )
-            if st.button("✅ Check Objects", type="primary", use_container_width=True):
-                correct = set(selected) & set(targets)
-                missing = set(targets) - set(selected)
-                false = set(selected) - set(targets)
-                score = max(0.0, min(100.0, 100 * len(correct) / len(targets) - 10 * len(false)))
-                if not missing and not false:
-                    st.success("🎉 Excellent! You found every hidden object.")
-                else:
-                    st.info(f"Found {len(correct)}/{len(targets)} target objects.")
-                old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
-                save_completed_game("Hidden Object Search", score)
-                st.session_state.game_result_message = game_result_voice("Hidden Object Search", score, old_d, new_d, language)
-                st.session_state.game_result_score = round(score, 1)
-                st.session_state.game_result_old_difficulty = old_d
-                st.session_state.game_result_new_difficulty = new_d
-                st.session_state.hidden_running = False
-
-            if st.button("⏹️ Exit Hidden Object Search"):
-                st.session_state.hidden_running = False
-                st.rerun()
-
-
-# ========================================================
-# TARGET TRACKER
-# ========================================================
-
-    if active_game == "Target Tracker":
-
-        st.subheader("🎯 Target Tracker")
-        st.write(
-            "A slow-moving, stress-free target appears in different grid locations. "
-            "Tap it before it disappears to train spatial precision and selective attention."
-        )
-
-        tracker_rounds = {1: 10, 2: 15, 3: 20}[difficulty]
-        tracker_size = {1: 4, 2: 5, 3: 6}[difficulty]
-        target_duration = {1: 3.0, 2: 2.5, 3: 2.0}[difficulty]
-
-        if not st.session_state.tracker_running:
-            if st.button("▶️ Start Target Tracker", type="primary", use_container_width=True):
-                st.session_state.tracker_round = 1
-                st.session_state.tracker_hits = 0
-                st.session_state.tracker_target_pos = random.randrange(tracker_size * tracker_size)
-                st.session_state.tracker_target_start = pytime.time()
-                st.session_state.tracker_running = True
-                st.rerun()
-        else:
-            if st_autorefresh is not None:
-                st_autorefresh(interval=250, limit=None, key="target_tracker_refresh")
-
-            elapsed = pytime.time() - float(st.session_state.tracker_target_start or pytime.time())
-            remaining = max(0.0, target_duration - elapsed)
-            st.progress(min(1.0, remaining / target_duration))
-            st.caption(f"Round {st.session_state.tracker_round}/{tracker_rounds} • Hits: {st.session_state.tracker_hits} • Target disappears in {remaining:.1f}s")
-
-            if remaining <= 0:
-                if st.session_state.tracker_round >= tracker_rounds:
-                    score = 100.0 * st.session_state.tracker_hits / tracker_rounds
-                    old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
-                    save_completed_game("Target Tracker", score)
-                    st.session_state.game_result_message = game_result_voice("Target Tracker", score, old_d, new_d, language)
-                    st.session_state.game_result_score = round(score, 1)
-                    st.session_state.game_result_old_difficulty = old_d
-                    st.session_state.game_result_new_difficulty = new_d
-                    st.session_state.tracker_running = False
-                    st.success(f"🎉 Target Tracker completed. Hits: {st.session_state.tracker_hits}/{tracker_rounds}")
-                else:
-                    st.session_state.tracker_round += 1
-                    st.session_state.tracker_target_pos = random.randrange(tracker_size * tracker_size)
-                    st.session_state.tracker_target_start = pytime.time()
-                    st.rerun()
-            else:
-                for r in range(tracker_size):
-                    cols = st.columns(tracker_size)
-                    for c in range(tracker_size):
-                        idx = r * tracker_size + c
-                        with cols[c]:
-                            label = "🎯" if idx == st.session_state.tracker_target_pos else "·"
-                            if st.button(label, key=f"tracker_{st.session_state.tracker_round}_{idx}", use_container_width=True):
-                                if idx == st.session_state.tracker_target_pos:
-                                    st.session_state.tracker_hits += 1
-                                    st.session_state.tracker_round += 1
-                                    if st.session_state.tracker_round > tracker_rounds:
-                                        score = 100.0 * st.session_state.tracker_hits / tracker_rounds
-                                        old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
-                                        save_completed_game("Target Tracker", score)
-                                        st.session_state.game_result_message = game_result_voice("Target Tracker", score, old_d, new_d, language)
-                                        st.session_state.game_result_score = round(score, 1)
-                                        st.session_state.game_result_old_difficulty = old_d
-                                        st.session_state.game_result_new_difficulty = new_d
-                                        st.session_state.tracker_running = False
-                                    else:
-                                        st.session_state.tracker_target_pos = random.randrange(tracker_size * tracker_size)
-                                        st.session_state.tracker_target_start = pytime.time()
-                                    st.rerun()
-
-            if st.button("⏹️ Exit Target Tracker"):
-                st.session_state.tracker_running = False
-                st.rerun()
 
 
 # ============================================================
@@ -6361,6 +6037,303 @@ elif selected_page == "games":
 
                                 st.rerun()
 
+
+# ========================================================
+# SCHULTE TABLE
+# ========================================================
+
+    if active_game == "Schulte Table":
+
+        st.subheader("🔢 Schulte Table")
+        st.write(
+            "Tap numbers from 1 upward as quickly as possible. "
+            "For training, keep your gaze anchored near the center square "
+            "and use peripheral vision to locate the next number."
+        )
+
+        schulte_size = {1: 5, 2: 6, 3: 7}[difficulty]
+        schulte_total = schulte_size * schulte_size
+
+        if not st.session_state.schulte_running:
+            st.info(
+                f"Level {difficulty}: {schulte_size}×{schulte_size} table "
+                f"with {schulte_total} numbers. Your time starts on Start."
+            )
+            if st.button("▶️ Start Schulte Table", type="primary", use_container_width=True):
+                nums = list(range(1, schulte_total + 1))
+                random.shuffle(nums)
+                st.session_state.schulte_grid = nums
+                st.session_state.schulte_next = 1
+                st.session_state.schulte_start_time = pytime.time()
+                st.session_state.schulte_errors = 0
+                st.session_state.schulte_running = True
+                st.rerun()
+        else:
+            elapsed = pytime.time() - float(st.session_state.schulte_start_time or pytime.time())
+            st.metric("Time", f"{elapsed:.1f} seconds")
+            st.caption(f"Find: **{st.session_state.schulte_next}**  | Errors: {st.session_state.schulte_errors}")
+
+            grid = st.session_state.schulte_grid
+            for r in range(schulte_size):
+                cols = st.columns(schulte_size)
+                for c in range(schulte_size):
+                    idx = r * schulte_size + c
+                    number = grid[idx]
+                    with cols[c]:
+                        if st.button(str(number), key=f"schulte_{st.session_state.schulte_next}_{idx}", use_container_width=True):
+                            if number == st.session_state.schulte_next:
+                                if number == schulte_total:
+                                    final_time = pytime.time() - float(st.session_state.schulte_start_time)
+                                    # Faster completion produces a higher score.
+                                    expected = 45 + (difficulty - 1) * 20
+                                    score = max(0.0, min(100.0, 100 - max(0, final_time - expected) * 1.8 - st.session_state.schulte_errors * 3))
+                                    old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
+                                    save_completed_game("Schulte Table", score)
+                                    st.session_state.game_result_message = game_result_voice("Schulte Table", score, old_d, new_d, language)
+                                    st.session_state.game_result_score = round(score, 1)
+                                    st.session_state.game_result_old_difficulty = old_d
+                                    st.session_state.game_result_new_difficulty = new_d
+                                    st.session_state.schulte_running = False
+                                    st.session_state.schulte_round = 0
+                                    st.success(f"🎉 Schulte Table completed in {final_time:.1f} seconds. Score: {score:.1f}/100")
+                                else:
+                                    st.session_state.schulte_next += 1
+                                    st.rerun()
+                            else:
+                                st.session_state.schulte_errors += 1
+                                st.warning(f"Try again — next number is {st.session_state.schulte_next}.")
+
+            if st.button("⏹️ Exit Schulte Table"):
+                st.session_state.schulte_running = False
+                st.rerun()
+
+
+# ========================================================
+# SPOT THE DIFFERENCE
+# ========================================================
+
+    if active_game == "Spot the Difference":
+
+        st.subheader("🔍 Spot the Difference")
+        st.write(
+            "Compare the two illustrations and identify the one changed location. "
+            "Look carefully for a tiny visual detail such as a missing, added, "
+            "or changed object."
+        )
+
+        spot_size = {1: 4, 2: 5, 3: 6}[difficulty]
+        spot_items = ["🏠", "🌳", "☀️", "🚗", "🌸", "🐶", "📚", "☁️", "🪟", "🪴"]
+
+        if not st.session_state.spot_running:
+            if st.button("▶️ Start Spot the Difference", type="primary", use_container_width=True):
+                base = [random.choice(spot_items) for _ in range(spot_size * spot_size)]
+                diff = random.randrange(len(base))
+                right = base.copy()
+                alternatives = [x for x in spot_items if x != base[diff]]
+                right[diff] = random.choice(alternatives)
+                st.session_state.spot_grid_left = base
+                st.session_state.spot_grid_right = right
+                st.session_state.spot_difference = diff
+                st.session_state.spot_choice = None
+                st.session_state.spot_running = True
+                st.session_state.spot_round += 1
+                st.rerun()
+        else:
+            left = st.session_state.spot_grid_left
+            right = st.session_state.spot_grid_right
+            st.markdown("**Left illustration**      **Right illustration**")
+            for r in range(spot_size):
+                lcols = st.columns(spot_size)
+                for c in range(spot_size):
+                    idx = r * spot_size + c
+                    with lcols[c]:
+                        st.markdown(f"<div style='font-size:30px;text-align:center;padding:8px'>{left[idx]}</div>", unsafe_allow_html=True)
+            st.write("")
+            for r in range(spot_size):
+                rcols = st.columns(spot_size)
+                for c in range(spot_size):
+                    idx = r * spot_size + c
+                    with rcols[c]:
+                        st.markdown(f"<div style='font-size:30px;text-align:center;padding:8px'>{right[idx]}</div>", unsafe_allow_html=True)
+
+            choice = st.selectbox(
+                "Which cell is different?",
+                list(range(1, spot_size * spot_size + 1)),
+                key=f"spot_select_{st.session_state.spot_round}"
+            )
+            if st.button("✅ Check Difference", type="primary", use_container_width=True):
+                chosen_idx = choice - 1
+                if chosen_idx == st.session_state.spot_difference:
+                    score = 100.0
+                    st.success("🎉 Correct! You found the difference.")
+                else:
+                    score = 0.0
+                    st.error(f"Not quite. The difference was at cell {st.session_state.spot_difference + 1}.")
+
+                old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
+                save_completed_game("Spot the Difference", score)
+                st.session_state.game_result_message = game_result_voice("Spot the Difference", score, old_d, new_d, language)
+                st.session_state.game_result_score = round(score, 1)
+                st.session_state.game_result_old_difficulty = old_d
+                st.session_state.game_result_new_difficulty = new_d
+                st.session_state.spot_running = False
+
+            if st.button("⏹️ Exit Spot the Difference"):
+                st.session_state.spot_running = False
+                st.rerun()
+
+
+# ========================================================
+# HIDDEN OBJECT SEARCH
+# ========================================================
+
+    if active_game == "Hidden Object Search":
+
+        st.subheader("🕵️ Hidden Object Search")
+        st.write(
+            "Find the requested objects inside the cluttered visual field. "
+            "Use the checklist to filter visual clutter and maintain prolonged focus."
+        )
+
+        hidden_size = {1: 5, 2: 6, 3: 7}[difficulty]
+        hidden_pool = ["🍎", "📚", "🚗", "🐶", "🌸", "🏠", "🌙", "🦜", "✏️", "📱", "☀️", "🌳", "⚽", "📷", "☂️"]
+        hidden_labels = {"🍎":"Apple", "📚":"Book", "🚗":"Car", "🐶":"Dog", "🌸":"Flower", "🏠":"House", "🌙":"Moon", "🦜":"Parrot", "✏️":"Pencil", "📱":"Phone", "☀️":"Sun", "🌳":"Tree", "⚽":"Ball", "📷":"Camera", "☂️":"Umbrella"}
+        target_count = {1: 3, 2: 4, 3: 5}[difficulty]
+
+        if not st.session_state.hidden_running:
+            if st.button("▶️ Start Hidden Object Search", type="primary", use_container_width=True):
+                targets = random.sample(hidden_pool, target_count)
+                clutter = [random.choice(hidden_pool) for _ in range(hidden_size * hidden_size - target_count)]
+                grid = targets + clutter
+                random.shuffle(grid)
+                st.session_state.hidden_targets = targets
+                st.session_state.hidden_grid = grid
+                st.session_state.hidden_selected = []
+                st.session_state.hidden_running = True
+                st.session_state.hidden_round += 1
+                st.rerun()
+        else:
+            targets = st.session_state.hidden_targets
+            st.markdown("**Find these:** " + "  •  ".join(f"{x} {hidden_labels[x]}" for x in targets))
+            grid = st.session_state.hidden_grid
+            for r in range(hidden_size):
+                cols = st.columns(hidden_size)
+                for c in range(hidden_size):
+                    idx = r * hidden_size + c
+                    with cols[c]:
+                        st.markdown(f"<div style='font-size:30px;text-align:center;padding:8px;background:#f8fafc;border-radius:10px'>{grid[idx]}</div>", unsafe_allow_html=True)
+
+            selected = st.multiselect(
+                "Select the objects you found",
+                options=sorted(hidden_pool, key=lambda x: hidden_labels[x]),
+                format_func=lambda x: f"{x} {hidden_labels[x]}",
+                key=f"hidden_select_{st.session_state.hidden_round}"
+            )
+            if st.button("✅ Check Objects", type="primary", use_container_width=True):
+                correct = set(selected) & set(targets)
+                missing = set(targets) - set(selected)
+                false = set(selected) - set(targets)
+                score = max(0.0, min(100.0, 100 * len(correct) / len(targets) - 10 * len(false)))
+                if not missing and not false:
+                    st.success("🎉 Excellent! You found every hidden object.")
+                else:
+                    st.info(f"Found {len(correct)}/{len(targets)} target objects.")
+                old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
+                save_completed_game("Hidden Object Search", score)
+                st.session_state.game_result_message = game_result_voice("Hidden Object Search", score, old_d, new_d, language)
+                st.session_state.game_result_score = round(score, 1)
+                st.session_state.game_result_old_difficulty = old_d
+                st.session_state.game_result_new_difficulty = new_d
+                st.session_state.hidden_running = False
+
+            if st.button("⏹️ Exit Hidden Object Search"):
+                st.session_state.hidden_running = False
+                st.rerun()
+
+
+# ========================================================
+# TARGET TRACKER
+# ========================================================
+
+    if active_game == "Target Tracker":
+
+        st.subheader("🎯 Target Tracker")
+        st.write(
+            "A slow-moving, stress-free target appears in different grid locations. "
+            "Tap it before it disappears to train spatial precision and selective attention."
+        )
+
+        tracker_rounds = {1: 10, 2: 15, 3: 20}[difficulty]
+        tracker_size = {1: 4, 2: 5, 3: 6}[difficulty]
+        target_duration = {1: 3.0, 2: 2.5, 3: 2.0}[difficulty]
+
+        if not st.session_state.tracker_running:
+            if st.button("▶️ Start Target Tracker", type="primary", use_container_width=True):
+                st.session_state.tracker_round = 1
+                st.session_state.tracker_hits = 0
+                st.session_state.tracker_target_pos = random.randrange(tracker_size * tracker_size)
+                st.session_state.tracker_target_start = pytime.time()
+                st.session_state.tracker_running = True
+                st.rerun()
+        else:
+            if st_autorefresh is not None:
+                st_autorefresh(interval=250, limit=None, key="target_tracker_refresh")
+
+            elapsed = pytime.time() - float(st.session_state.tracker_target_start or pytime.time())
+            remaining = max(0.0, target_duration - elapsed)
+            st.progress(min(1.0, remaining / target_duration))
+            st.caption(f"Round {st.session_state.tracker_round}/{tracker_rounds} • Hits: {st.session_state.tracker_hits} • Target disappears in {remaining:.1f}s")
+
+            if remaining <= 0:
+                if st.session_state.tracker_round >= tracker_rounds:
+                    score = 100.0 * st.session_state.tracker_hits / tracker_rounds
+                    old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
+                    save_completed_game("Target Tracker", score)
+                    st.session_state.game_result_message = game_result_voice("Target Tracker", score, old_d, new_d, language)
+                    st.session_state.game_result_score = round(score, 1)
+                    st.session_state.game_result_old_difficulty = old_d
+                    st.session_state.game_result_new_difficulty = new_d
+                    st.session_state.tracker_running = False
+                    st.success(f"🎉 Target Tracker completed. Hits: {st.session_state.tracker_hits}/{tracker_rounds}")
+                else:
+                    st.session_state.tracker_round += 1
+                    st.session_state.tracker_target_pos = random.randrange(tracker_size * tracker_size)
+                    st.session_state.tracker_target_start = pytime.time()
+                    st.rerun()
+            else:
+                for r in range(tracker_size):
+                    cols = st.columns(tracker_size)
+                    for c in range(tracker_size):
+                        idx = r * tracker_size + c
+                        with cols[c]:
+                            label = "🎯" if idx == st.session_state.tracker_target_pos else "·"
+                            if st.button(label, key=f"tracker_{st.session_state.tracker_round}_{idx}", use_container_width=True):
+                                if idx == st.session_state.tracker_target_pos:
+                                    st.session_state.tracker_hits += 1
+                                    st.session_state.tracker_round += 1
+                                    if st.session_state.tracker_round > tracker_rounds:
+                                        score = 100.0 * st.session_state.tracker_hits / tracker_rounds
+                                        old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
+                                        save_completed_game("Target Tracker", score)
+                                        st.session_state.game_result_message = game_result_voice("Target Tracker", score, old_d, new_d, language)
+                                        st.session_state.game_result_score = round(score, 1)
+                                        st.session_state.game_result_old_difficulty = old_d
+                                        st.session_state.game_result_new_difficulty = new_d
+                                        st.session_state.tracker_running = False
+                                    else:
+                                        st.session_state.tracker_target_pos = random.randrange(tracker_size * tracker_size)
+                                        st.session_state.tracker_target_start = pytime.time()
+                                    st.rerun()
+
+            if st.button("⏹️ Exit Target Tracker"):
+                st.session_state.tracker_running = False
+                st.rerun()
+
+
+# ============================================================
+
+
+                # =================================================
 
 # ============================================================
 # REMINDERS
