@@ -6315,8 +6315,17 @@ elif selected_page == "games":
 
             elapsed = pytime.time() - float(st.session_state.tracker_target_start or pytime.time())
             remaining = max(0.0, target_duration - elapsed)
+            # Display the timer as a clear whole-second countdown, like Image Recognition:
+            # 2 -> 1 -> 0. The target is removed exactly when it reaches 0.
+            countdown = int(math.ceil(remaining))
             st.progress(min(1.0, remaining / target_duration))
-            st.caption(f"Round {st.session_state.tracker_round}/{tracker_rounds} • Hits: {st.session_state.tracker_hits} • Target disappears in {remaining:.1f}s")
+            st.markdown(
+                f"<div style=\"text-align:center;font-size:30px;font-weight:700;margin:8px 0;\">"
+                f"⏱️ Target disappears in: {countdown}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            st.caption(f"Round {st.session_state.tracker_round}/{tracker_rounds} • Hits: {st.session_state.tracker_hits}")
 
             if remaining <= 0:
                 if st.session_state.tracker_round >= tracker_rounds:
