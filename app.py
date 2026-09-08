@@ -2026,6 +2026,9 @@ DEFAULT_SESSION_VALUES = {
     "tracker_hits": 0,
     "tracker_target_pos": None,
     "tracker_target_start": None,
+    "tracker_target_visible": False,
+    "tracker_next_round_at": None,
+    "tracker_feedback": "",
 }
 
 
@@ -4704,6 +4707,9 @@ def reset_tracker_game():
     st.session_state.tracker_hits = 0
     st.session_state.tracker_target_pos = None
     st.session_state.tracker_target_start = None
+    st.session_state.tracker_target_visible = False
+    st.session_state.tracker_next_round_at = None
+    st.session_state.tracker_feedback = ""
 
 
 def exit_current_game(game_name):
@@ -6265,71 +6271,204 @@ elif selected_page == "games":
 
         tracker_rounds = {1: 10, 2: 15, 3: 20}[difficulty]
         tracker_size = {1: 4, 2: 5, 3: 6}[difficulty]
-        # Target is visible for exactly 2 seconds at every difficulty level.
-        # The autorefresh below updates the timer and removes the target when
-        # the 2-second visibility window expires.
         target_duration = 2.0
+        hidden_gap = 0.5
 
+        # --------------------------------------------------------
+        # START GAME
+        # --------------------------------------------------------
         if not st.session_state.tracker_running:
-            if st.button("▶️ Start Target Tracker", type="primary", use_container_width=True):
+            if st.button(
+                "▶️ Start Target Tracker",
+                type="primary",
+                use_container_width=True,
+                key="tracker_start"
+            ):
                 st.session_state.tracker_round = 1
                 st.session_state.tracker_hits = 0
-                st.session_state.tracker_target_pos = random.randrange(tracker_size * tracker_size)
-                st.session_state.tracker_target_start = pytime.time()
+                st.session_state.tracker_target_pos = random.randrange(
+                    tracker_size * tracker_size
+                )
+                st.session_state.tracker_target_start = pytime.monotonic()
+                st.session_state.tracker_target_visible = True
+                st.session_state.tracker_next_round_at = None
+                st.session_state.tracker_feedback = ""
                 st.session_state.tracker_running = True
                 st.rerun()
+
+        # --------------------------------------------------------
+        # ACTIVE GAME
+        # --------------------------------------------------------
         else:
-            if st_autorefresh is not None:
-                st_autorefresh(interval=250, limit=None, key="target_tracker_refresh")
-
-            elapsed = pytime.time() - float(st.session_state.tracker_target_start or pytime.time())
-            remaining = max(0.0, target_duration - elapsed)
-            st.progress(min(1.0, remaining / target_duration))
-            st.caption(f"Round {st.session_state.tracker_round}/{tracker_rounds} • Hits: {st.session_state.tracker_hits} • Target disappears in {remaining:.1f}s")
-
-            if remaining <= 0:
-                if st.session_state.tracker_round >= tracker_rounds:
-                    score = 100.0 * st.session_state.tracker_hits / tracker_rounds
-                    old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
-                    save_completed_game("Target Tracker", score)
-                    st.session_state.game_result_message = game_result_voice("Target Tracker", score, old_d, new_d, language)
-                    st.session_state.game_result_score = round(score, 1)
-                    st.session_state.game_result_old_difficulty = old_d
-                    st.session_state.game_result_new_difficulty = new_d
-                    st.session_state.tracker_running = False
-                    st.success(f"🎉 Target Tracker completed. Hits: {st.session_state.tracker_hits}/{tracker_rounds}")
-                else:
-                    st.session_state.tracker_round += 1
-                    st.session_state.tracker_target_pos = random.randrange(tracker_size * tracker_size)
-                    st.session_state.tracker_target_start = pytime.time()
-                    st.rerun()
+            # The game MUST rerun repeatedly. Without this, Python time does
+            # not update on the browser because Streamlit only redraws after
+            # an interaction or a rerun.
+            if st_autorefresh is None:
+                st.error(
+                    "Target Tracker needs streamlit-autorefresh for its timer. "
+                    "Add streamlit-autorefresh to requirements.txt and redeploy."
+                )
             else:
-                for r in range(tracker_size):
-                    cols = st.columns(tracker_size)
-                    for c in range(tracker_size):
-                        idx = r * tracker_size + c
-                        with cols[c]:
-                            label = "🎯" if idx == st.session_state.tracker_target_pos else "·"
-                            if st.button(label, key=f"tracker_{st.session_state.tracker_round}_{idx}", use_container_width=True):
-                                if idx == st.session_state.tracker_target_pos:
-                                    st.session_state.tracker_hits += 1
-                                    st.session_state.tracker_round += 1
-                                    if st.session_state.tracker_round > tracker_rounds:
-                                        score = 100.0 * st.session_state.tracker_hits / tracker_rounds
-                                        old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
-                                        save_completed_game("Target Tracker", score)
-                                        st.session_state.game_result_message = game_result_voice("Target Tracker", score, old_d, new_d, language)
-                                        st.session_state.game_result_score = round(score, 1)
-                                        st.session_state.game_result_old_difficulty = old_d
-                                        st.session_state.game_result_new_difficulty = new_d
-                                        st.session_state.tracker_running = False
-                                    else:
-                                        st.session_state.tracker_target_pos = random.randrange(tracker_size * tracker_size)
-                                        st.session_state.tracker_target_start = pytime.time()
-                                    st.rerun()
+                st_autorefresh(
+                    interval=200,
+                    limit=None,
+                    key=f"target_tracker_refresh_{user_id}"
+                )
 
-            if st.button("⏹️ Exit Target Tracker"):
-                st.session_state.tracker_running = False
+            now = pytime.monotonic()
+
+            # ----------------------------------------------------
+            # SHORT HIDDEN GAP AFTER A MISS
+            # ----------------------------------------------------
+            if not st.session_state.tracker_target_visible:
+                next_at = st.session_state.tracker_next_round_at
+
+                if next_at is not None and now >= float(next_at):
+                    # Start the next round only AFTER the old target has
+                    # actually disappeared from the screen.
+                    if st.session_state.tracker_round >= tracker_rounds:
+                        score = 100.0 * st.session_state.tracker_hits / tracker_rounds
+                        old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
+                        save_completed_game("Target Tracker", score)
+                        st.session_state.game_result_message = game_result_voice(
+                            "Target Tracker", score, old_d, new_d, language
+                        )
+                        st.session_state.game_result_score = round(score, 1)
+                        st.session_state.game_result_old_difficulty = old_d
+                        st.session_state.game_result_new_difficulty = new_d
+                        st.session_state.tracker_running = False
+                        st.session_state.tracker_next_round_at = None
+                        st.session_state.tracker_feedback = (
+                            f"🎉 Target Tracker completed! "
+                            f"Hits: {st.session_state.tracker_hits}/{tracker_rounds}"
+                        )
+                        st.rerun()
+                    else:
+                        st.session_state.tracker_round += 1
+                        st.session_state.tracker_target_pos = random.randrange(
+                            tracker_size * tracker_size
+                        )
+                        st.session_state.tracker_target_start = pytime.monotonic()
+                        st.session_state.tracker_target_visible = True
+                        st.session_state.tracker_next_round_at = None
+                        st.session_state.tracker_feedback = ""
+                        st.rerun()
+                else:
+                    st.info("👀 Target disappeared — get ready for the next target...")
+
+            # ----------------------------------------------------
+            # TARGET VISIBLE
+            # ----------------------------------------------------
+            else:
+                start_time = st.session_state.tracker_target_start
+                if start_time is None:
+                    # Safety recovery for old/stale sessions.
+                    st.session_state.tracker_target_start = pytime.monotonic()
+                    start_time = st.session_state.tracker_target_start
+
+                elapsed = max(0.0, now - float(start_time))
+                remaining = max(0.0, target_duration - elapsed)
+
+                st.progress(
+                    min(1.0, elapsed / target_duration),
+                    text=f"Round {st.session_state.tracker_round}/{tracker_rounds}"
+                )
+                st.caption(
+                    f"Round {st.session_state.tracker_round}/{tracker_rounds} • "
+                    f"Hits: {st.session_state.tracker_hits} • "
+                    f"Target disappears in {remaining:.1f}s"
+                )
+
+                # IMPORTANT: remove the target immediately when its timer ends.
+                if remaining <= 0:
+                    st.session_state.tracker_target_visible = False
+                    st.session_state.tracker_next_round_at = now + hidden_gap
+                    st.session_state.tracker_target_start = None
+                    st.session_state.tracker_feedback = "⏱️ Target disappeared!"
+                    st.rerun()
+
+                # ------------------------------------------------
+                # GRID
+                # ------------------------------------------------
+                else:
+                    for r in range(tracker_size):
+                        cols = st.columns(tracker_size)
+                        for c in range(tracker_size):
+                            idx = r * tracker_size + c
+                            with cols[c]:
+                                label = (
+                                    "🎯"
+                                    if idx == st.session_state.tracker_target_pos
+                                    else "·"
+                                )
+
+                                if st.button(
+                                    label,
+                                    key=(
+                                        f"tracker_{st.session_state.tracker_round}_"
+                                        f"{idx}"
+                                    ),
+                                    use_container_width=True
+                                ):
+                                    # Ignore clicks if the target expired between
+                                    # rendering and the user's click.
+                                    click_elapsed = pytime.monotonic() - float(start_time)
+                                    if click_elapsed >= target_duration:
+                                        st.session_state.tracker_target_visible = False
+                                        st.session_state.tracker_next_round_at = (
+                                            pytime.monotonic() + hidden_gap
+                                        )
+                                        st.session_state.tracker_target_start = None
+                                        st.session_state.tracker_feedback = "⏱️ Too late — target disappeared!"
+                                        st.rerun()
+
+                                    if idx == st.session_state.tracker_target_pos:
+                                        st.session_state.tracker_hits += 1
+                                        st.session_state.tracker_target_visible = False
+                                        st.session_state.tracker_target_start = None
+                                        st.session_state.tracker_round += 1
+
+                                        if st.session_state.tracker_round > tracker_rounds:
+                                            score = (
+                                                100.0
+                                                * st.session_state.tracker_hits
+                                                / tracker_rounds
+                                            )
+                                            old_d, new_d, _ = update_adaptive_difficulty(
+                                                user_id, score
+                                            )
+                                            save_completed_game("Target Tracker", score)
+                                            st.session_state.game_result_message = game_result_voice(
+                                                "Target Tracker", score, old_d, new_d, language
+                                            )
+                                            st.session_state.game_result_score = round(score, 1)
+                                            st.session_state.game_result_old_difficulty = old_d
+                                            st.session_state.game_result_new_difficulty = new_d
+                                            st.session_state.tracker_running = False
+                                            st.session_state.tracker_next_round_at = None
+                                            st.session_state.tracker_feedback = (
+                                                f"🎉 Target Tracker completed! "
+                                                f"Hits: {st.session_state.tracker_hits}/{tracker_rounds}"
+                                            )
+                                        else:
+                                            # Small hidden gap makes the target
+                                            # visibly disappear before the next one.
+                                            st.session_state.tracker_next_round_at = (
+                                                pytime.monotonic() + hidden_gap
+                                            )
+                                            st.session_state.tracker_feedback = "✅ Target hit!"
+
+                                        st.rerun()
+
+            if st.session_state.tracker_feedback:
+                st.caption(st.session_state.tracker_feedback)
+
+            if st.button(
+                "⏹️ Exit Target Tracker",
+                key="tracker_exit",
+                use_container_width=True
+            ):
+                reset_tracker_game()
                 st.rerun()
 
 
