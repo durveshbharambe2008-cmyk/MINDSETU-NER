@@ -67,6 +67,7 @@ import hashlib
 import io
 import re
 import base64
+import math
 import textwrap
 from pathlib import Path
 from PIL import Image
@@ -163,6 +164,37 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Hide Streamlit's default top-right controls and place the SMRITISETU logo
+# in their place. The logo remains visible while the large center logo is removed.
+try:
+    if APP_LOGO is not None:
+        logo_buffer = io.BytesIO()
+        APP_LOGO.save(logo_buffer, format="PNG")
+        logo_b64 = base64.b64encode(logo_buffer.getvalue()).decode("utf-8")
+        st.markdown(f"""
+        <style>
+            #MainMenu {{ visibility: hidden; }}
+            footer {{ visibility: hidden; }}
+            [data-testid="stToolbar"] {{ visibility: hidden !important; }}
+            [data-testid="stDecoration"] {{ visibility: hidden !important; }}
+            .smritisetu-fixed-logo {{
+                position: fixed;
+                top: 8px;
+                right: 14px;
+                width: 52px;
+                height: 52px;
+                object-fit: contain;
+                border-radius: 50%;
+                z-index: 999999;
+                background: white;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+            }}
+        </style>
+        <img class="smritisetu-fixed-logo" src="data:image/png;base64,{logo_b64}" alt="SMRITISETU logo" />
+        """, unsafe_allow_html=True)
+except Exception:
+    pass
 
 
 
@@ -901,7 +933,7 @@ DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_NAME = str(DATA_DIR / "mindsetu_ner.db")
 
-
+@st.cache_resource
 def get_connection():
 
     connection = sqlite3.connect(
@@ -1589,6 +1621,612 @@ def text(key, language):
 
 
 # ============================================================
+# SIMPLE, LANGUAGE-AWARE USER INSTRUCTIONS
+# ============================================================
+# These instructions are shown at the point where the user needs them.
+# The language is selected before login and stored with each user account.
+INSTRUCTION_TRANSLATIONS = {'English': {'login': 'Enter your username and password, then press Login. New patients, doctors, and caretakers '
+                      'should use the matching Registration tab first.',
+             'patient_registration': 'Enter your basic details, create a username and password, choose your language, '
+                                     'and press Create Patient Account. Remember your username and password for login.',
+             'provider_registration': 'Enter your personal and professional details, upload the requested '
+                                      'qualification information/document, choose your language, and submit. Provider '
+                                      'accounts may wait for administrator verification.',
+             'home': 'Read the dashboard to see your current status. Use the menu to open games, reminders, history, '
+                     'details, or reports.',
+             'games': 'Choose one game. Read its instructions before starting. Complete the rounds carefully. You may '
+                      'exit an unfinished game at any time. Your completed score is saved.',
+             'memory': 'Watch the numbers carefully for 10 seconds. When they disappear, enter the numbers in the same '
+                       'order and submit.',
+             'pattern': 'Watch the pattern carefully. After it is hidden, reproduce the pattern as instructed and '
+                        'submit your answer.',
+             'attention': 'Watch the screen and respond to the target when it appears. Follow the on-screen '
+                          'instruction and complete each round.',
+             'image': 'Look at the pictures during the viewing countdown. Wait until the countdown finishes, then '
+                      'choose the correct answer.',
+             'schulte': 'Find the numbers in order, starting from 1. Tap them in sequence as quickly and accurately as '
+                        'you can.',
+             'spot': 'Look at both sides carefully. Find the different item and select it as instructed.',
+             'hidden': 'Look at the picture and find the hidden target objects. Tap each target you can find.',
+             'target': 'A target appears in the grid for a short time. Tap the target before it disappears. Do not tap '
+                       'other cells.',
+             'reminders': 'Add a reminder with a title and time. Check your reminders regularly and delete reminders '
+                          'you no longer need.',
+             'history': 'Review your previous game scores and performance. Use the history to see your progress over '
+                        'time.',
+             'details': 'Check your profile information, language, assigned provider, and other saved details.',
+             'reports': 'Open available reports to review your recorded performance. Patients can listen to reports '
+                        'when voice output is available.'},
+ 'Hindi': {'login': 'अपना यूज़रनेम और पासवर्ड डालें और लॉगिन दबाएँ। नया खाता बनाने के लिए सही रजिस्ट्रेशन टैब चुनें।',
+           'patient_registration': 'अपनी जानकारी भरें, यूज़रनेम और पासवर्ड बनाएँ, भाषा चुनें और खाता बनाएँ दबाएँ। '
+                                   'लॉगिन के लिए यूज़रनेम और पासवर्ड याद रखें।',
+           'provider_registration': 'अपनी व्यक्तिगत और पेशेवर जानकारी भरें, मांगी गई योग्यता की जानकारी/दस्तावेज़ दें, '
+                                    'भाषा चुनें और सबमिट करें। सत्यापन के लिए एडमिन की मंज़ूरी लग सकती है।',
+           'home': 'डैशबोर्ड पर अपनी स्थिति देखें। गेम, रिमाइंडर, इतिहास, जानकारी और रिपोर्ट खोलने के लिए मेनू का '
+                   'उपयोग करें।',
+           'games': 'एक गेम चुनें और शुरू करने से पहले निर्देश पढ़ें। सभी राउंड ध्यान से पूरा करें। अधूरा गेम कभी भी '
+                    'बाहर निकलकर छोड़ सकते हैं। पूरा स्कोर सेव होगा।',
+           'memory': '10 सेकंड तक नंबर ध्यान से देखें। नंबर छिपने के बाद उसी क्रम में नंबर लिखें और सबमिट करें।',
+           'pattern': 'पैटर्न ध्यान से देखें। छिपने के बाद दिए गए निर्देश के अनुसार पैटर्न दोबारा बनाएँ और सबमिट करें।',
+           'attention': 'स्क्रीन देखें और लक्ष्य दिखाई देने पर निर्देश के अनुसार प्रतिक्रिया दें। हर राउंड पूरा करें।',
+           'image': 'काउंटडाउन के दौरान चित्र देखें। काउंटडाउन खत्म होने के बाद सही उत्तर चुनें।',
+           'schulte': '1 से शुरू करके नंबर क्रम में खोजें। नंबरों को सही क्रम में जल्दी और ध्यान से दबाएँ।',
+           'spot': 'दोनों तरफ ध्यान से देखें। अलग वस्तु खोजें और निर्देश के अनुसार उसे चुनें।',
+           'hidden': 'चित्र में छिपी हुई वस्तुओं को खोजें। जो लक्ष्य मिले उस पर टैप करें।',
+           'target': 'ग्रिड में लक्ष्य थोड़े समय के लिए दिखाई देगा। गायब होने से पहले लक्ष्य पर टैप करें। दूसरे खाने '
+                     'पर टैप न करें।',
+           'reminders': 'नाम और समय देकर रिमाइंडर जोड़ें। अपने रिमाइंडर नियमित रूप से देखें और पुराने रिमाइंडर हटाएँ।',
+           'history': 'अपने पुराने गेम स्कोर और प्रदर्शन देखें। समय के साथ अपनी प्रगति समझने के लिए इतिहास देखें।',
+           'details': 'अपनी प्रोफ़ाइल, भाषा, जुड़े हुए डॉक्टर/केयरटेकर और अन्य जानकारी देखें।',
+           'reports': 'उपलब्ध रिपोर्ट खोलकर अपना रिकॉर्ड किया हुआ प्रदर्शन देखें। आवाज़ उपलब्ध होने पर मरीज रिपोर्ट '
+                      'सुन सकते हैं।'},
+ 'Marathi': {'login': 'तुमचे यूजरनेम आणि पासवर्ड टाका आणि लॉगिन दाबा. नवीन खातेासाठी योग्य रजिस्ट्रेशन टॅब निवडा.',
+             'patient_registration': 'तुमची माहिती भरा, यूजरनेम आणि पासवर्ड तयार करा, भाषा निवडा आणि खाते तयार करा '
+                                     'दाबा. लॉगिनसाठी माहिती लक्षात ठेवा.',
+             'provider_registration': 'तुमची वैयक्तिक व व्यावसायिक माहिती भरा, मागितलेली पात्रता माहिती/कागदपत्र द्या, '
+                                      'भाषा निवडा आणि सबमिट करा. पडताळणीसाठी प्रशासकाची मंजुरी लागू शकते.',
+             'home': 'डॅशबोर्डवर तुमची स्थिती पहा. गेम, स्मरणपत्रे, इतिहास, माहिती आणि अहवाल उघडण्यासाठी मेनू वापरा.',
+             'games': 'एक गेम निवडा आणि सुरू करण्यापूर्वी सूचना वाचा. सर्व राउंड काळजीपूर्वक पूर्ण करा. अपूर्ण गेम '
+                      'कधीही बाहेर पडून थांबवू शकता. पूर्ण स्कोअर सेव्ह होईल.',
+             'memory': '10 सेकंद नंबर काळजीपूर्वक पहा. नंबर लपल्यानंतर त्याच क्रमाने नंबर लिहा आणि सबमिट करा.',
+             'pattern': 'पॅटर्न काळजीपूर्वक पहा. तो लपल्यानंतर दिलेल्या सूचनेनुसार पुन्हा तयार करा आणि सबमिट करा.',
+             'attention': 'स्क्रीनकडे लक्ष द्या आणि लक्ष्य दिसल्यावर सूचनेनुसार प्रतिक्रिया द्या. प्रत्येक राउंड पूर्ण '
+                          'करा.',
+             'image': 'काउंटडाउन चालू असताना चित्रे पहा. काउंटडाउन संपल्यावर योग्य उत्तर निवडा.',
+             'schulte': '1 पासून नंबर क्रमाने शोधा. योग्य क्रमाने नंबर शक्य तितक्या जलद आणि अचूकपणे दाबा.',
+             'spot': 'दोन्ही बाजू काळजीपूर्वक पहा. वेगळी वस्तू शोधा आणि सूचनेनुसार निवडा.',
+             'hidden': 'चित्रातील लपलेल्या वस्तू शोधा. सापडलेल्या लक्ष्यावर टॅप करा.',
+             'target': 'ग्रिडमध्ये लक्ष्य थोड्या वेळासाठी दिसेल. ते गायब होण्यापूर्वी टॅप करा. इतर खाण्यांवर टॅप करू '
+                       'नका.',
+             'reminders': 'नाव आणि वेळ देऊन स्मरणपत्र जोडा. स्मरणपत्रे नियमित तपासा आणि गरज नसलेली हटवा.',
+             'history': 'जुने गेम स्कोअर आणि कामगिरी पहा. वेळेनुसार प्रगती समजण्यासाठी इतिहास वापरा.',
+             'details': 'तुमची प्रोफाइल, भाषा, जोडलेले डॉक्टर/केअरटेकर आणि इतर माहिती तपासा.',
+             'reports': 'उपलब्ध अहवाल उघडून तुमची नोंदवलेली कामगिरी पहा. आवाज उपलब्ध असल्यास रुग्ण अहवाल ऐकू शकतात.'},
+ 'Gujarati': {'login': 'તમારું યુઝરનેમ અને પાસવર્ડ દાખલ કરો અને Login દબાવો. નવું એકાઉન્ટ બનાવવા યોગ્ય Registration '
+                       'ટેબ પસંદ કરો.',
+              'patient_registration': 'તમારી માહિતી ભરો, યુઝરનેમ અને પાસવર્ડ બનાવો, ભાષા પસંદ કરો અને Create Account '
+                                      'દબાવો. Login માટે વિગતો યાદ રાખો.',
+              'provider_registration': 'વ્યક્તિગત અને વ્યવસાયિક માહિતી ભરો, જરૂરી લાયકાતની માહિતી/દસ્તાવેજ આપો, ભાષા '
+                                       'પસંદ કરો અને Submit કરો. ચકાસણી માટે એડમિનની મંજૂરી લાગી શકે છે.',
+              'home': 'ડેશબોર્ડ પર તમારી સ્થિતિ જુઓ. ગેમ, રિમાઇન્ડર, ઇતિહાસ, વિગતો અને રિપોર્ટ ખોલવા મેનૂનો ઉપયોગ કરો.',
+              'games': 'એક ગેમ પસંદ કરો અને શરૂ કરતા પહેલા સૂચનાઓ વાંચો. બધા રાઉન્ડ ધ્યાનથી પૂર્ણ કરો. અધૂરી ગેમમાંથી '
+                       'કોઈપણ સમયે બહાર નીકળી શકો છો. પૂર્ણ સ્કોર સેવ થશે.',
+              'memory': '10 સેકન્ડ સુધી નંબર ધ્યાનથી જુઓ. નંબર છુપાયા પછી એ જ ક્રમમાં નંબર દાખલ કરો અને Submit કરો.',
+              'pattern': 'પેટર્ન ધ્યાનથી જુઓ. તે છુપાયા પછી સૂચના મુજબ પેટર્ન ફરી બનાવો અને Submit કરો.',
+              'attention': 'સ્ક્રીન જુઓ અને લક્ષ્ય દેખાય ત્યારે સૂચના મુજબ પ્રતિસાદ આપો. દરેક રાઉન્ડ પૂર્ણ કરો.',
+              'image': 'કાઉન્ટડાઉન દરમિયાન ચિત્રો જુઓ. કાઉન્ટડાઉન પૂરો થયા પછી સાચો જવાબ પસંદ કરો.',
+              'schulte': '1 થી શરૂ કરીને નંબર ક્રમમાં શોધો. સાચા ક્રમમાં ઝડપથી અને ધ્યાનથી નંબર દબાવો.',
+              'spot': 'બંને બાજુ ધ્યાનથી જુઓ. અલગ વસ્તુ શોધો અને સૂચના મુજબ પસંદ કરો.',
+              'hidden': 'ચિત્રમાં છુપાયેલી વસ્તુઓ શોધો અને મળેલા લક્ષ્ય પર ટેપ કરો.',
+              'target': 'ગ્રિડમાં લક્ષ્ય થોડા સમય માટે દેખાશે. તે ગાયબ થાય તે પહેલાં ટેપ કરો. બીજા ખાના પર ટેપ ન કરો.',
+              'reminders': 'નામ અને સમય સાથે રિમાઇન્ડર ઉમેરો. રિમાઇન્ડર નિયમિત તપાસો અને જરૂર ન હોય તે કાઢી નાખો.',
+              'history': 'તમારા જૂના ગેમ સ્કોર અને પ્રદર્શન જુઓ. સમય સાથે પ્રગતિ સમજવા માટે ઇતિહાસ જુઓ.',
+              'details': 'તમારી પ્રોફાઇલ, ભાષા, જોડાયેલા ડૉક્ટર/કેરટેકર અને અન્ય માહિતી તપાસો.',
+              'reports': 'ઉપલબ્ધ રિપોર્ટ ખોલીને તમારું નોંધાયેલ પ્રદર્શન જુઓ. અવાજ ઉપલબ્ધ હોય તો દર્દી રિપોર્ટ સાંભળી '
+                         'શકે છે.'},
+ 'Tamil': {'login': 'உங்கள் பயனர்பெயர் மற்றும் கடவுச்சொல்லை உள்ளிட்டு Login அழுத்தவும். புதிய கணக்கிற்கு சரியான '
+                    'Registration தாவலைத் தேர்ந்தெடுக்கவும்.',
+           'patient_registration': 'உங்கள் தகவல்களை உள்ளிட்டு, பயனர்பெயர் மற்றும் கடவுச்சொல் உருவாக்கி, மொழியைத் '
+                                   'தேர்ந்தெடுத்து Create Account அழுத்தவும்.',
+           'provider_registration': 'தனிப்பட்ட மற்றும் தொழில்முறை தகவல்களை உள்ளிட்டு, தேவையான தகுதி தகவல்/ஆவணத்தை '
+                                    'வழங்கி, மொழியைத் தேர்ந்தெடுத்து Submit செய்யவும். நிர்வாகி சரிபார்ப்பு '
+                                    'தேவைப்படலாம்.',
+           'home': 'டாஷ்போர்டில் உங்கள் நிலையைப் பார்க்கவும். கேம்கள், நினைவூட்டல்கள், வரலாறு, விவரங்கள் மற்றும் '
+                   'அறிக்கைகளை மெனுவில் திறக்கவும்.',
+           'games': 'ஒரு கேமைத் தேர்ந்தெடுத்து தொடங்குவதற்கு முன் வழிமுறைகளைப் படிக்கவும். அனைத்து சுற்றுகளையும் '
+                    'கவனமாக முடிக்கவும். முடிக்காத கேமிலிருந்து எப்போது வேண்டுமானாலும் வெளியேறலாம்.',
+           'memory': '10 விநாடிகள் எண்களை கவனமாகப் பார்க்கவும். எண்கள் மறைந்த பிறகு அதே வரிசையில் உள்ளிடவும்.',
+           'pattern': 'வடிவத்தை கவனமாகப் பார்க்கவும். அது மறைந்த பிறகு வழிமுறையின்படி மீண்டும் உருவாக்கவும்.',
+           'attention': 'திரையை கவனித்து இலக்கு தோன்றும்போது வழிமுறையின்படி பதிலளிக்கவும்.',
+           'image': 'கவுண்ட்டவுன் இருக்கும் போது படங்களைப் பார்க்கவும். கவுண்ட்டவுன் முடிந்த பிறகு சரியான பதிலைத் '
+                    'தேர்ந்தெடுக்கவும்.',
+           'schulte': '1 முதல் தொடங்கி எண்களை வரிசையாகக் கண்டுபிடிக்கவும். சரியான வரிசையில் வேகமாகத் தட்டவும்.',
+           'spot': 'இரு பக்கங்களையும் கவனமாகப் பார்க்கவும். வேறுபட்ட பொருளைக் கண்டுபிடித்து தேர்ந்தெடுக்கவும்.',
+           'hidden': 'படத்தில் மறைந்துள்ள பொருட்களைக் கண்டுபிடித்து கிடைத்த இலக்கைத் தட்டவும்.',
+           'target': 'கட்டத்தில் இலக்கு சிறிது நேரம் தோன்றும். மறையும் முன் அதைத் தட்டவும். மற்ற கட்டங்களைத் தட்ட '
+                     'வேண்டாம்.',
+           'reminders': 'பெயரும் நேரமும் கொடுத்து நினைவூட்டலைச் சேர்க்கவும். தேவையில்லாத நினைவூட்டல்களை நீக்கவும்.',
+           'history': 'முந்தைய கேம் மதிப்பெண்கள் மற்றும் செயல்திறனைப் பார்க்கவும். உங்கள் முன்னேற்றத்தை அறிய '
+                      'வரலாற்றைப் பயன்படுத்தவும்.',
+           'details': 'உங்கள் சுயவிவரம், மொழி, இணைக்கப்பட்ட மருத்துவர்/பராமரிப்பாளர் மற்றும் பிற தகவல்களைப் '
+                      'பார்க்கவும்.',
+           'reports': 'கிடைக்கும் அறிக்கைகளைத் திறந்து பதிவு செய்யப்பட்ட செயல்திறனைப் பார்க்கவும். குரல் வசதி '
+                      'இருந்தால் அறிக்கையை கேட்கலாம்.'},
+ 'Telugu': {'login': 'మీ వినియోగదారు పేరు మరియు పాస్\u200cవర్డ్ నమోదు చేసి Login నొక్కండి. కొత్త ఖాతా కోసం సరైన '
+                     'Registration ట్యాబ్\u200cను ఎంచుకోండి.',
+            'patient_registration': 'మీ వివరాలు నమోదు చేసి, వినియోగదారు పేరు మరియు పాస్\u200cవర్డ్ సృష్టించి, భాష '
+                                    'ఎంచుకుని Create Account నొక్కండి.',
+            'provider_registration': 'వ్యక్తిగత మరియు వృత్తిపరమైన వివరాలు నమోదు చేసి, అవసరమైన అర్హత సమాచారం/పత్రాన్ని '
+                                     'అందించి, భాష ఎంచుకుని Submit చేయండి. అడ్మిన్ ధృవీకరణ అవసరం కావచ్చు.',
+            'home': 'డ్యాష్\u200cబోర్డ్\u200cలో మీ స్థితిని చూడండి. గేమ్స్, రిమైండర్లు, చరిత్ర, వివరాలు మరియు '
+                    'రిపోర్టులను మెనూ ద్వారా తెరవండి.',
+            'games': 'ఒక గేమ్ ఎంచుకుని ప్రారంభించే ముందు సూచనలు చదవండి. అన్ని రౌండ్లు జాగ్రత్తగా పూర్తి చేయండి. పూర్తి '
+                     'కాని గేమ్ నుంచి ఎప్పుడైనా బయటకు రావచ్చు.',
+            'memory': '10 సెకన్ల పాటు సంఖ్యలను జాగ్రత్తగా చూడండి. అవి దాచిన తర్వాత అదే క్రమంలో నమోదు చేయండి.',
+            'pattern': 'ప్యాటర్న్\u200cను జాగ్రత్తగా చూడండి. అది దాచిన తర్వాత సూచనల ప్రకారం మళ్లీ రూపొందించండి.',
+            'attention': 'స్క్రీన్\u200cను గమనించి లక్ష్యం కనిపించినప్పుడు సూచనల ప్రకారం స్పందించండి.',
+            'image': 'కౌంట్\u200cడౌన్ సమయంలో చిత్రాలను చూడండి. కౌంట్\u200cడౌన్ ముగిసిన తర్వాత సరైన సమాధానం ఎంచుకోండి.',
+            'schulte': '1 నుండి ప్రారంభించి సంఖ్యలను క్రమంలో కనుగొనండి. సరైన క్రమంలో వేగంగా నొక్కండి.',
+            'spot': 'రెండు వైపులా జాగ్రత్తగా చూడండి. తేడా ఉన్న వస్తువును కనుగొని ఎంచుకోండి.',
+            'hidden': 'చిత్రంలో దాగి ఉన్న వస్తువులను కనుగొని కనిపించిన లక్ష్యాన్ని నొక్కండి.',
+            'target': 'గ్రిడ్\u200cలో లక్ష్యం కొద్దిసేపు కనిపిస్తుంది. అది మాయమయ్యే ముందు నొక్కండి. ఇతర సెల్\u200cలను '
+                      'నొక్కవద్దు.',
+            'reminders': 'పేరు మరియు సమయంతో రిమైండర్ జోడించండి. అవసరం లేని రిమైండర్లను తొలగించండి.',
+            'history': 'మునుపటి గేమ్ స్కోర్లు మరియు పనితీరును చూడండి. మీ పురోగతిని తెలుసుకోవడానికి చరిత్రను '
+                       'ఉపయోగించండి.',
+            'details': 'మీ ప్రొఫైల్, భాష, అనుసంధానమైన డాక్టర్/కేర్\u200cటేకర్ మరియు ఇతర వివరాలను చూడండి.',
+            'reports': 'అందుబాటులో ఉన్న రిపోర్టులను తెరిచి నమోదైన పనితీరును చూడండి. వాయిస్ అందుబాటులో ఉంటే రిపోర్టులను '
+                       'వినవచ్చు.'},
+ 'Bengali': {'login': 'আপনার ইউজারনেম ও পাসওয়ার্ড লিখে Login চাপুন। নতুন অ্যাকাউন্টের জন্য সঠিক Registration ট্যাব '
+                      'বেছে নিন।',
+             'patient_registration': 'আপনার তথ্য দিন, ইউজারনেম ও পাসওয়ার্ড তৈরি করুন, ভাষা বেছে নিয়ে Create Account '
+                                     'চাপুন।',
+             'provider_registration': 'ব্যক্তিগত ও পেশাগত তথ্য দিন, প্রয়োজনীয় যোগ্যতার তথ্য/নথি দিন, ভাষা বেছে '
+                                      'Submit করুন। প্রশাসকের যাচাই লাগতে পারে।',
+             'home': 'ড্যাশবোর্ডে আপনার অবস্থা দেখুন। গেম, রিমাইন্ডার, ইতিহাস, তথ্য ও রিপোর্ট মেনু থেকে খুলুন।',
+             'games': 'একটি গেম বেছে নিয়ে শুরু করার আগে নির্দেশ পড়ুন। সব রাউন্ড মন দিয়ে শেষ করুন। অসম্পূর্ণ গেম '
+                      'যেকোনো সময় বন্ধ করতে পারেন।',
+             'memory': '১০ সেকেন্ড সংখ্যাগুলি মন দিয়ে দেখুন। সংখ্যা লুকিয়ে গেলে একই ক্রমে লিখে Submit করুন।',
+             'pattern': 'প্যাটার্নটি মন দিয়ে দেখুন। লুকিয়ে গেলে নির্দেশ অনুযায়ী আবার তৈরি করুন।',
+             'attention': 'স্ক্রিনে লক্ষ্য দেখুন এবং নির্দেশ অনুযায়ী প্রতিক্রিয়া দিন।',
+             'image': 'কাউন্টডাউনের সময় ছবিগুলি দেখুন। কাউন্টডাউন শেষ হলে সঠিক উত্তর বেছে নিন।',
+             'schulte': '১ থেকে শুরু করে সংখ্যাগুলি ক্রমে খুঁজুন। সঠিক ক্রমে দ্রুত চাপুন।',
+             'spot': 'দুই পাশ মন দিয়ে দেখুন। আলাদা জিনিসটি খুঁজে নির্দেশ অনুযায়ী বেছে নিন।',
+             'hidden': 'ছবিতে লুকানো জিনিস খুঁজুন এবং পাওয়া লক্ষ্যটিতে চাপুন।',
+             'target': 'গ্রিডে লক্ষ্য অল্প সময়ের জন্য দেখা যাবে। অদৃশ্য হওয়ার আগে সেটিতে চাপুন। অন্য ঘরে চাপবেন না।',
+             'reminders': 'নাম ও সময় দিয়ে রিমাইন্ডার যোগ করুন। দরকার নেই এমন রিমাইন্ডার মুছে দিন।',
+             'history': 'আগের গেমের স্কোর ও পারফরম্যান্স দেখুন। সময়ের সঙ্গে অগ্রগতি বুঝতে ইতিহাস ব্যবহার করুন।',
+             'details': 'আপনার প্রোফাইল, ভাষা, যুক্ত ডাক্তার/কেয়ারটেকার এবং অন্যান্য তথ্য দেখুন।',
+             'reports': 'উপলব্ধ রিপোর্ট খুলে রেকর্ড করা পারফরম্যান্স দেখুন। ভয়েস সুবিধা থাকলে রিপোর্ট শুনতে পারবেন।'},
+ 'French': {'login': "Saisissez votre nom d'utilisateur et votre mot de passe, puis appuyez sur Connexion.",
+            'games': 'Choisissez un jeu et lisez les instructions avant de commencer.',
+            'memory': 'Regardez les nombres pendant 10 secondes, puis saisissez-les dans le même ordre.',
+            'pattern': 'Regardez le modèle, puis reproduisez-le selon les instructions.',
+            'attention': 'Surveillez la cible et répondez selon les instructions.',
+            'image': 'Regardez les images pendant le compte à rebours, puis choisissez la bonne réponse.',
+            'schulte': "Trouvez les nombres dans l'ordre à partir de 1.",
+            'spot': "Cherchez l'objet différent et sélectionnez-le.",
+            'hidden': "Trouvez les objets cachés dans l'image.",
+            'target': "Touchez la cible avant qu'elle disparaisse.",
+            'patient_registration': "Saisissez votre nom d'utilisateur et votre mot de passe, puis appuyez sur "
+                                    'Connexion.',
+            'provider_registration': "Saisissez votre nom d'utilisateur et votre mot de passe, puis appuyez sur "
+                                     'Connexion.',
+            'home': 'Choisissez un jeu et lisez les instructions avant de commencer.',
+            'reminders': 'Choisissez un jeu et lisez les instructions avant de commencer.',
+            'history': 'Choisissez un jeu et lisez les instructions avant de commencer.',
+            'details': 'Choisissez un jeu et lisez les instructions avant de commencer.',
+            'reports': 'Choisissez un jeu et lisez les instructions avant de commencer.'},
+ 'Spanish': {'login': 'Escriba su usuario y contraseña y pulse Iniciar sesión.',
+             'games': 'Elija un juego y lea las instrucciones antes de comenzar.',
+             'memory': 'Mire los números durante 10 segundos y después escríbalos en el mismo orden.',
+             'pattern': 'Mire el patrón y repítalo según las instrucciones.',
+             'attention': 'Observe la pantalla y responda cuando aparezca el objetivo.',
+             'image': 'Mire las imágenes durante la cuenta atrás y después elija la respuesta correcta.',
+             'schulte': 'Busque los números en orden empezando por 1.',
+             'spot': 'Busque el objeto diferente y selecciónelo.',
+             'hidden': 'Encuentre los objetos ocultos en la imagen.',
+             'target': 'Toque el objetivo antes de que desaparezca.',
+             'patient_registration': 'Escriba su usuario y contraseña y pulse Iniciar sesión.',
+             'provider_registration': 'Escriba su usuario y contraseña y pulse Iniciar sesión.',
+             'home': 'Elija un juego y lea las instrucciones antes de comenzar.',
+             'reminders': 'Elija un juego y lea las instrucciones antes de comenzar.',
+             'history': 'Elija un juego y lea las instrucciones antes de comenzar.',
+             'details': 'Elija un juego y lea las instrucciones antes de comenzar.',
+             'reports': 'Elija un juego y lea las instrucciones antes de comenzar.'},
+ 'German': {'login': 'Geben Sie Benutzername und Passwort ein und drücken Sie Anmelden.',
+            'games': 'Wählen Sie ein Spiel und lesen Sie die Anleitung vor dem Start.',
+            'memory': 'Merken Sie sich die Zahlen 10 Sekunden lang und geben Sie sie danach in derselben Reihenfolge '
+                      'ein.',
+            'pattern': 'Sehen Sie sich das Muster an und wiederholen Sie es nach der Anleitung.',
+            'attention': 'Beobachten Sie den Bildschirm und reagieren Sie auf das Ziel.',
+            'image': 'Sehen Sie die Bilder während des Countdowns an und wählen Sie danach die richtige Antwort.',
+            'schulte': 'Finden Sie die Zahlen ab 1 in der richtigen Reihenfolge.',
+            'spot': 'Finden Sie den Unterschied und wählen Sie ihn aus.',
+            'hidden': 'Finden Sie die versteckten Objekte im Bild.',
+            'target': 'Tippen Sie auf das Ziel, bevor es verschwindet.',
+            'patient_registration': 'Geben Sie Benutzername und Passwort ein und drücken Sie Anmelden.',
+            'provider_registration': 'Geben Sie Benutzername und Passwort ein und drücken Sie Anmelden.',
+            'home': 'Wählen Sie ein Spiel und lesen Sie die Anleitung vor dem Start.',
+            'reminders': 'Wählen Sie ein Spiel und lesen Sie die Anleitung vor dem Start.',
+            'history': 'Wählen Sie ein Spiel und lesen Sie die Anleitung vor dem Start.',
+            'details': 'Wählen Sie ein Spiel und lesen Sie die Anleitung vor dem Start.',
+            'reports': 'Wählen Sie ein Spiel und lesen Sie die Anleitung vor dem Start.'},
+ 'Italian': {'login': 'Inserisci nome utente e password e premi Accedi.',
+             'games': 'Scegli un gioco e leggi le istruzioni prima di iniziare.',
+             'memory': 'Guarda i numeri per 10 secondi e inseriscili nello stesso ordine.',
+             'pattern': 'Guarda il modello e ripetilo seguendo le istruzioni.',
+             'attention': 'Osserva lo schermo e rispondi quando appare il bersaglio.',
+             'image': 'Guarda le immagini durante il conto alla rovescia e poi scegli la risposta corretta.',
+             'schulte': 'Trova i numeri in ordine partendo da 1.',
+             'spot': "Trova l'oggetto diverso e selezionalo.",
+             'hidden': "Trova gli oggetti nascosti nell'immagine.",
+             'target': 'Tocca il bersaglio prima che scompaia.',
+             'patient_registration': 'Inserisci nome utente e password e premi Accedi.',
+             'provider_registration': 'Inserisci nome utente e password e premi Accedi.',
+             'home': 'Scegli un gioco e leggi le istruzioni prima di iniziare.',
+             'reminders': 'Scegli un gioco e leggi le istruzioni prima di iniziare.',
+             'history': 'Scegli un gioco e leggi le istruzioni prima di iniziare.',
+             'details': 'Scegli un gioco e leggi le istruzioni prima di iniziare.',
+             'reports': 'Scegli un gioco e leggi le istruzioni prima di iniziare.'},
+ 'Portuguese': {'login': 'Digite seu nome de usuário e senha e pressione Login.',
+                'games': 'Escolha um jogo e leia as instruções antes de começar.',
+                'memory': 'Observe os números por 10 segundos e depois digite-os na mesma ordem.',
+                'pattern': 'Observe o padrão e repita-o conforme as instruções.',
+                'attention': 'Observe a tela e responda quando o alvo aparecer.',
+                'image': 'Veja as imagens durante a contagem e depois escolha a resposta correta.',
+                'schulte': 'Encontre os números em ordem começando pelo 1.',
+                'spot': 'Encontre o objeto diferente e selecione-o.',
+                'hidden': 'Encontre os objetos escondidos na imagem.',
+                'target': 'Toque no alvo antes que ele desapareça.',
+                'patient_registration': 'Digite seu nome de usuário e senha e pressione Login.',
+                'provider_registration': 'Digite seu nome de usuário e senha e pressione Login.',
+                'home': 'Escolha um jogo e leia as instruções antes de começar.',
+                'reminders': 'Escolha um jogo e leia as instruções antes de começar.',
+                'history': 'Escolha um jogo e leia as instruções antes de começar.',
+                'details': 'Escolha um jogo e leia as instruções antes de começar.',
+                'reports': 'Escolha um jogo e leia as instruções antes de começar.'},
+ 'Arabic': {'login': 'أدخل اسم المستخدم وكلمة المرور ثم اضغط تسجيل الدخول.',
+            'games': 'اختر لعبة واقرأ التعليمات قبل البدء.',
+            'memory': 'شاهد الأرقام لمدة 10 ثوانٍ ثم أدخلها بالترتيب نفسه.',
+            'pattern': 'شاهد النمط ثم أعده حسب التعليمات.',
+            'attention': 'راقب الشاشة واستجب عند ظهور الهدف.',
+            'image': 'شاهد الصور أثناء العد التنازلي ثم اختر الإجابة الصحيحة.',
+            'schulte': 'ابحث عن الأرقام بالترتيب بدءًا من 1.',
+            'spot': 'ابحث عن العنصر المختلف واختره.',
+            'hidden': 'ابحث عن العناصر المخفية في الصورة.',
+            'target': 'اضغط على الهدف قبل أن يختفي.',
+            'patient_registration': 'أدخل اسم المستخدم وكلمة المرور ثم اضغط تسجيل الدخول.',
+            'provider_registration': 'أدخل اسم المستخدم وكلمة المرور ثم اضغط تسجيل الدخول.',
+            'home': 'اختر لعبة واقرأ التعليمات قبل البدء.',
+            'reminders': 'اختر لعبة واقرأ التعليمات قبل البدء.',
+            'history': 'اختر لعبة واقرأ التعليمات قبل البدء.',
+            'details': 'اختر لعبة واقرأ التعليمات قبل البدء.',
+            'reports': 'اختر لعبة واقرأ التعليمات قبل البدء.'},
+ 'Chinese': {'login': '输入用户名和密码，然后点击登录。',
+             'games': '选择一个游戏，开始前先阅读说明。',
+             'memory': '观察数字10秒，数字消失后按相同顺序输入。',
+             'pattern': '观察图案，然后按照说明重新完成图案。',
+             'attention': '观察屏幕，目标出现时按照说明操作。',
+             'image': '倒计时期间观察图片，倒计时结束后选择正确答案。',
+             'schulte': '从1开始按顺序寻找数字。',
+             'spot': '仔细比较两边，找到不同的项目。',
+             'hidden': '在图片中寻找隐藏的目标。',
+             'target': '在目标消失前点击它。',
+             'patient_registration': '输入用户名和密码，然后点击登录。',
+             'provider_registration': '输入用户名和密码，然后点击登录。',
+             'home': '选择一个游戏，开始前先阅读说明。',
+             'reminders': '选择一个游戏，开始前先阅读说明。',
+             'history': '选择一个游戏，开始前先阅读说明。',
+             'details': '选择一个游戏，开始前先阅读说明。',
+             'reports': '选择一个游戏，开始前先阅读说明。'},
+ 'Japanese': {'login': 'ユーザー名とパスワードを入力してログインを押してください。',
+              'games': 'ゲームを選び、開始前に説明を読んでください。',
+              'memory': '10秒間数字を見て覚え、消えた後に同じ順番で入力してください。',
+              'pattern': 'パターンを見て、説明どおりに再現してください。',
+              'attention': '画面を見て、目標が出たら説明どおりに反応してください。',
+              'image': 'カウントダウン中に画像を見て、終了後に正しい答えを選んでください。',
+              'schulte': '1から順番に数字を探してください。',
+              'spot': '左右を見比べて違うものを選んでください。',
+              'hidden': '画像の中の隠れた対象を探してください。',
+              'target': '消える前に目標をタップしてください。',
+              'patient_registration': 'ユーザー名とパスワードを入力してログインを押してください。',
+              'provider_registration': 'ユーザー名とパスワードを入力してログインを押してください。',
+              'home': 'ゲームを選び、開始前に説明を読んでください。',
+              'reminders': 'ゲームを選び、開始前に説明を読んでください。',
+              'history': 'ゲームを選び、開始前に説明を読んでください。',
+              'details': 'ゲームを選び、開始前に説明を読んでください。',
+              'reports': 'ゲームを選び、開始前に説明を読んでください。'},
+ 'Korean': {'login': '사용자 이름과 비밀번호를 입력하고 로그인을 누르세요.',
+            'games': '게임을 선택하고 시작하기 전에 안내를 읽으세요.',
+            'memory': '10초 동안 숫자를 보고 기억한 뒤 같은 순서로 입력하세요.',
+            'pattern': '패턴을 보고 안내에 따라 다시 만드세요.',
+            'attention': '화면을 보고 목표가 나타나면 안내에 따라 반응하세요.',
+            'image': '카운트다운 동안 이미지를 보고 끝난 후 정답을 선택하세요.',
+            'schulte': '1부터 숫자를 순서대로 찾으세요.',
+            'spot': '양쪽을 비교하여 다른 항목을 찾으세요.',
+            'hidden': '그림에서 숨겨진 대상을 찾으세요.',
+            'target': '목표가 사라지기 전에 누르세요.',
+            'patient_registration': '사용자 이름과 비밀번호를 입력하고 로그인을 누르세요.',
+            'provider_registration': '사용자 이름과 비밀번호를 입력하고 로그인을 누르세요.',
+            'home': '게임을 선택하고 시작하기 전에 안내를 읽으세요.',
+            'reminders': '게임을 선택하고 시작하기 전에 안내를 읽으세요.',
+            'history': '게임을 선택하고 시작하기 전에 안내를 읽으세요.',
+            'details': '게임을 선택하고 시작하기 전에 안내를 읽으세요.',
+            'reports': '게임을 선택하고 시작하기 전에 안내를 읽으세요.'},
+ 'Russian': {'login': 'Введите имя пользователя и пароль и нажмите Войти.',
+             'games': 'Выберите игру и прочитайте инструкцию перед началом.',
+             'memory': 'Смотрите на числа 10 секунд, затем введите их в том же порядке.',
+             'pattern': 'Посмотрите на образец и повторите его по инструкции.',
+             'attention': 'Следите за экраном и реагируйте на цель по инструкции.',
+             'image': 'Смотрите на изображения во время отсчёта, затем выберите правильный ответ.',
+             'schulte': 'Найдите числа по порядку, начиная с 1.',
+             'spot': 'Найдите отличающийся предмет и выберите его.',
+             'hidden': 'Найдите скрытые объекты на изображении.',
+             'target': 'Нажмите на цель до того, как она исчезнет.',
+             'patient_registration': 'Введите имя пользователя и пароль и нажмите Войти.',
+             'provider_registration': 'Введите имя пользователя и пароль и нажмите Войти.',
+             'home': 'Выберите игру и прочитайте инструкцию перед началом.',
+             'reminders': 'Выберите игру и прочитайте инструкцию перед началом.',
+             'history': 'Выберите игру и прочитайте инструкцию перед началом.',
+             'details': 'Выберите игру и прочитайте инструкцию перед началом.',
+             'reports': 'Выберите игру и прочитайте инструкцию перед началом.'},
+ 'Turkish': {'login': "Kullanıcı adınızı ve şifrenizi girip Giriş yap'a basın.",
+             'games': 'Bir oyun seçin ve başlamadan önce talimatları okuyun.',
+             'memory': 'Sayıları 10 saniye izleyin, sonra aynı sırayla girin.',
+             'pattern': 'Desene bakın ve talimata göre yeniden oluşturun.',
+             'attention': 'Ekranı izleyin ve hedef göründüğünde talimata göre yanıt verin.',
+             'image': 'Geri sayım sırasında resimlere bakın, sonra doğru cevabı seçin.',
+             'schulte': "1'den başlayarak sayıları sırayla bulun.",
+             'spot': 'Farklı nesneyi bulun ve seçin.',
+             'hidden': 'Resimdeki gizli nesneleri bulun.',
+             'target': 'Hedef kaybolmadan önce ona dokunun.',
+             'patient_registration': "Kullanıcı adınızı ve şifrenizi girip Giriş yap'a basın.",
+             'provider_registration': "Kullanıcı adınızı ve şifrenizi girip Giriş yap'a basın.",
+             'home': 'Bir oyun seçin ve başlamadan önce talimatları okuyun.',
+             'reminders': 'Bir oyun seçin ve başlamadan önce talimatları okuyun.',
+             'history': 'Bir oyun seçin ve başlamadan önce talimatları okuyun.',
+             'details': 'Bir oyun seçin ve başlamadan önce talimatları okuyun.',
+             'reports': 'Bir oyun seçin ve başlamadan önce talimatları okuyun.'},
+ 'Assamese': {'login': 'আপোনাৰ ইউজাৰনেম আৰু পাছৱৰ্ড লিখি Login টিপক।',
+              'games': 'এটা গেম বাছি লওক আৰু আৰম্ভ কৰাৰ আগতে নিৰ্দেশনা পঢ়ক।',
+              'memory': '১০ ছেকেণ্ড সংখ্যা চাওক, তাৰ পিছত একে ক্ৰমত লিখক।',
+              'pattern': 'পেটাৰ্নটো চাওক আৰু নিৰ্দেশনা অনুসৰি পুনৰ কৰক।',
+              'attention': 'স্ক্ৰীনলৈ লক্ষ্য ৰাখি লক্ষ্য দেখা দিলে নিৰ্দেশনা অনুসৰি কাম কৰক।',
+              'image': 'কাউণ্টডাউনৰ সময়ত ছবিবোৰ চাওক আৰু পিছত সঠিক উত্তৰ বাছক।',
+              'schulte': '১ৰ পৰা সংখ্যা ক্ৰমত বিচাৰক।',
+              'spot': 'বেলেগ বস্তুটো বিচাৰি বাছক।',
+              'hidden': 'ছবিত লুকাই থকা লক্ষ্য বিচাৰক।',
+              'target': 'লক্ষ্যটো নোহোৱা হোৱাৰ আগতে টিপক।',
+              'patient_registration': 'আপোনাৰ ইউজাৰনেম আৰু পাছৱৰ্ড লিখি Login টিপক।',
+              'provider_registration': 'আপোনাৰ ইউজাৰনেম আৰু পাছৱৰ্ড লিখি Login টিপক।',
+              'home': 'এটা গেম বাছি লওক আৰু আৰম্ভ কৰাৰ আগতে নিৰ্দেশনা পঢ়ক।',
+              'reminders': 'এটা গেম বাছি লওক আৰু আৰম্ভ কৰাৰ আগতে নিৰ্দেশনা পঢ়ক।',
+              'history': 'এটা গেম বাছি লওক আৰু আৰম্ভ কৰাৰ আগতে নিৰ্দেশনা পঢ়ক।',
+              'details': 'এটা গেম বাছি লওক আৰু আৰম্ভ কৰাৰ আগতে নিৰ্দেশনা পঢ়ক।',
+              'reports': 'এটা গেম বাছি লওক আৰু আৰম্ভ কৰাৰ আগতে নিৰ্দেশনা পঢ়ক।'},
+ 'Bodo': {'login': 'Username aru password no, Login button dabao.',
+          'games': 'Game khon saai, start-a agote instruction porho.',
+          'memory': '10 second number saai, pise same order-a number no likho.',
+          'pattern': 'Pattern saai, instruction mutabik abar bonhao.',
+          'attention': 'Screen saai, target aasile instruction mutabik response koro.',
+          'image': 'Countdown somoi image saai, pise correct answer saai lo.',
+          'schulte': '1 niphrai number order-a saai lo.',
+          'spot': 'Different item saai select koro.',
+          'hidden': 'Image-a hidden target saai lo.',
+          'target': 'Target disappear howar agote tap koro.',
+          'patient_registration': 'Username aru password no, Login button dabao.',
+          'provider_registration': 'Username aru password no, Login button dabao.',
+          'home': 'Game khon saai, start-a agote instruction porho.',
+          'reminders': 'Game khon saai, start-a agote instruction porho.',
+          'history': 'Game khon saai, start-a agote instruction porho.',
+          'details': 'Game khon saai, start-a agote instruction porho.',
+          'reports': 'Game khon saai, start-a agote instruction porho.'},
+ 'Khasi': {'login': 'Thoh ia ka username bad password, nangta pynleit Login.',
+           'games': 'Jied ia ka game bad pule ia ki jingbthah shuwa ban sdang.',
+           'memory': 'Peit ia ki number 10 second, nangta thoh ia ki ha kajuh ka rukom.',
+           'pattern': 'Peit ia ka pattern bad leh biang katkum ka jingbthah.',
+           'attention': 'Peit ia ka screen bad jubab haba mih ka target.',
+           'image': 'Peit ia ki dur ha ka countdown, nangta jied ia ka jubab kaba dei.',
+           'schulte': 'Wad ia ki number ha ka jinglong naduh 1.',
+           'spot': 'Wad ia ka item kaba pher bad jied ia ka.',
+           'hidden': 'Wad ia ki target kiba rieh ha ka dur.',
+           'target': 'Tap ia ka target shuwa ba kan jah.',
+           'patient_registration': 'Thoh ia ka username bad password, nangta pynleit Login.',
+           'provider_registration': 'Thoh ia ka username bad password, nangta pynleit Login.',
+           'home': 'Jied ia ka game bad pule ia ki jingbthah shuwa ban sdang.',
+           'reminders': 'Jied ia ka game bad pule ia ki jingbthah shuwa ban sdang.',
+           'history': 'Jied ia ka game bad pule ia ki jingbthah shuwa ban sdang.',
+           'details': 'Jied ia ka game bad pule ia ki jingbthah shuwa ban sdang.',
+           'reports': 'Jied ia ka game bad pule ia ki jingbthah shuwa ban sdang.'},
+ 'Mizo': {'login': 'Username leh password ziak la Login tih rawh.',
+          'games': 'Game pakhat thlang la tan hma chuan thuchhuah hi chhiar rawh.',
+          'memory': '10 second chhung number en la an bo hnuah order angin ziak rawh.',
+          'pattern': 'Pattern en la thuchhuah angin siam leh rawh.',
+          'attention': 'Screen en la target a lo langin thuchhuah angin chhang rawh.',
+          'image': 'Countdown chhung image en la a zawh hnuah chhanna dik thlang rawh.',
+          'schulte': '1 atangin number chu orderin zawng rawh.',
+          'spot': 'A danglam item chu zawng la thlang rawh.',
+          'hidden': 'Image-ah target thup chu zawng rawh.',
+          'target': 'Target bo hma in tap rawh.',
+          'patient_registration': 'Username leh password ziak la Login tih rawh.',
+          'provider_registration': 'Username leh password ziak la Login tih rawh.',
+          'home': 'Game pakhat thlang la tan hma chuan thuchhuah hi chhiar rawh.',
+          'reminders': 'Game pakhat thlang la tan hma chuan thuchhuah hi chhiar rawh.',
+          'history': 'Game pakhat thlang la tan hma chuan thuchhuah hi chhiar rawh.',
+          'details': 'Game pakhat thlang la tan hma chuan thuchhuah hi chhiar rawh.',
+          'reports': 'Game pakhat thlang la tan hma chuan thuchhuah hi chhiar rawh.'},
+ 'Meitei (Manipuri)': {'login': 'Username amasung password thokpa matamda Login piba yeng-u.',
+                       'games': 'Game ama amsu thokpa mapungda instruction puba yeng-u.',
+                       'memory': 'Number-sing 10 second yeng-u, amagumba order-da piba yeng-u.',
+                       'pattern': 'Pattern yeng-u amasung instruction matungda amuk hakpa tou-u.',
+                       'attention': 'Screen yeng-u amasung target lakpa matamda instruction matungda tou-u.',
+                       'image': 'Countdown matamda image-sing yeng-u amasung matungda correct answer khang-u.',
+                       'schulte': '1 dagi number-sing order-da yeng-u.',
+                       'spot': 'Different item khang-u amasung select tou-u.',
+                       'hidden': 'Image-da thokpa target-sing yeng-u.',
+                       'target': 'Target yaotpa mapungda tap tou-u.',
+                       'patient_registration': 'Username amasung password thokpa matamda Login piba yeng-u.',
+                       'provider_registration': 'Username amasung password thokpa matamda Login piba yeng-u.',
+                       'home': 'Game ama amsu thokpa mapungda instruction puba yeng-u.',
+                       'reminders': 'Game ama amsu thokpa mapungda instruction puba yeng-u.',
+                       'history': 'Game ama amsu thokpa mapungda instruction puba yeng-u.',
+                       'details': 'Game ama amsu thokpa mapungda instruction puba yeng-u.',
+                       'reports': 'Game ama amsu thokpa mapungda instruction puba yeng-u.'},
+ 'Kannada': {'login': 'ನಿಮ್ಮ ಬಳಕೆದಾರ ಹೆಸರು ಮತ್ತು ಪಾಸ್\u200cವರ್ಡ್ ನಮೂದಿಸಿ Login ಒತ್ತಿರಿ. ಹೊಸ ಖಾತೆಗೆ ಸರಿಯಾದ Registration '
+                      'ಆಯ್ಕೆಮಾಡಿ.',
+             'patient_registration': 'ನಿಮ್ಮ ವಿವರಗಳನ್ನು ನಮೂದಿಸಿ, ಬಳಕೆದಾರ ಹೆಸರು ಮತ್ತು ಪಾಸ್\u200cವರ್ಡ್ ರಚಿಸಿ, ಭಾಷೆ ಆಯ್ಕೆ '
+                                     'ಮಾಡಿ ಖಾತೆ ರಚಿಸಿ.',
+             'provider_registration': 'ವೈಯಕ್ತಿಕ ಮತ್ತು ವೃತ್ತಿಪರ ವಿವರಗಳನ್ನು ನಮೂದಿಸಿ, ಅಗತ್ಯ ಅರ್ಹತಾ ಮಾಹಿತಿ/ದಾಖಲೆ ನೀಡಿ '
+                                      'ಮತ್ತು Submit ಮಾಡಿ. ನಿರ್ವಾಹಕರ ಪರಿಶೀಲನೆ ಬೇಕಾಗಬಹುದು.',
+             'home': 'ಡ್ಯಾಶ್\u200cಬೋರ್ಡ್\u200cನಲ್ಲಿ ನಿಮ್ಮ ಸ್ಥಿತಿಯನ್ನು ನೋಡಿ. Games, Reminders, History, Details ಮತ್ತು '
+                     'Reports ತೆರೆಯಲು ಮೆನು ಬಳಸಿ.',
+             'games': 'ಒಂದು ಆಟವನ್ನು ಆಯ್ಕೆ ಮಾಡಿ ಮತ್ತು ಆರಂಭಿಸುವ ಮೊದಲು ಸೂಚನೆ ಓದಿ. ಎಲ್ಲಾ ಸುತ್ತುಗಳನ್ನು ಎಚ್ಚರಿಕೆಯಿಂದ '
+                      'ಪೂರ್ಣಗೊಳಿಸಿ. ಅಪೂರ್ಣ ಆಟದಿಂದ ಯಾವಾಗ ಬೇಕಾದರೂ ಹೊರಬರಬಹುದು.',
+             'memory': '10 ಸೆಕೆಂಡ್\u200cಗಳ ಕಾಲ ಸಂಖ್ಯೆಗಳನ್ನು ಗಮನಿಸಿ. ಅವು ಮರೆಯಾದ ನಂತರ ಅದೇ ಕ್ರಮದಲ್ಲಿ ನಮೂದಿಸಿ.',
+             'pattern': 'ಪ್ಯಾಟರ್ನ್ ನೋಡಿ. ಅದು ಮರೆಯಾದ ನಂತರ ಸೂಚನೆಯಂತೆ ಮತ್ತೆ ರಚಿಸಿ.',
+             'attention': 'ಪರದೆಯನ್ನು ಗಮನಿಸಿ. ಗುರಿ ಕಾಣಿಸಿದಾಗ ಸೂಚನೆಯಂತೆ ಪ್ರತಿಕ್ರಿಯಿಸಿ.',
+             'image': 'ಕೌಂಟ್\u200cಡೌನ್ ಸಮಯದಲ್ಲಿ ಚಿತ್ರಗಳನ್ನು ನೋಡಿ. ಮುಗಿದ ನಂತರ ಸರಿಯಾದ ಉತ್ತರ ಆಯ್ಕೆಮಾಡಿ.',
+             'schulte': '1ರಿಂದ ಆರಂಭಿಸಿ ಸಂಖ್ಯೆಗಳನ್ನು ಕ್ರಮವಾಗಿ ಹುಡುಕಿ ಮತ್ತು ಸರಿಯಾಗಿ ಒತ್ತಿರಿ.',
+             'spot': 'ಎರಡೂ ಬದಿಗಳನ್ನು ಗಮನಿಸಿ. ವಿಭಿನ್ನ ವಸ್ತುವನ್ನು ಹುಡುಕಿ ಆಯ್ಕೆಮಾಡಿ.',
+             'hidden': 'ಚಿತ್ರದಲ್ಲಿರುವ ಮರೆಮಾಡಿದ ವಸ್ತುಗಳನ್ನು ಹುಡುಕಿ ಮತ್ತು ಗುರಿಯನ್ನು ಒತ್ತಿರಿ.',
+             'target': 'ಗ್ರಿಡ್\u200cನಲ್ಲಿ ಗುರಿ ಸ್ವಲ್ಪ ಸಮಯ ಕಾಣಿಸುತ್ತದೆ. ಅದು ಮರೆಯಾಗುವ ಮೊದಲು ಒತ್ತಿರಿ. ಇತರ ಕೋಶಗಳನ್ನು '
+                       'ಒತ್ತಬೇಡಿ.',
+             'reminders': 'ಹೆಸರು ಮತ್ತು ಸಮಯದೊಂದಿಗೆ Reminder ಸೇರಿಸಿ. ಅಗತ್ಯವಿಲ್ಲದ Reminder ಅಳಿಸಿ.',
+             'history': 'ಹಿಂದಿನ ಆಟಗಳ ಸ್ಕೋರ್ ಮತ್ತು ಕಾರ್ಯಕ್ಷಮತೆಯನ್ನು ನೋಡಿ. ನಿಮ್ಮ ಪ್ರಗತಿಯನ್ನು ಪರಿಶೀಲಿಸಿ.',
+             'details': 'ನಿಮ್ಮ ಪ್ರೊಫೈಲ್, ಭಾಷೆ, ಸಂಪರ್ಕಿತ ವೈದ್ಯರು/ಕೇರ್\u200cಟೇಕರ್ ಮತ್ತು ಇತರ ವಿವರಗಳನ್ನು ನೋಡಿ.',
+             'reports': 'ಲಭ್ಯವಿರುವ ವರದಿಗಳನ್ನು ತೆರೆಯಿರಿ ಮತ್ತು ದಾಖಲಾದ ಕಾರ್ಯಕ್ಷಮತೆಯನ್ನು ಪರಿಶೀಲಿಸಿ.'},
+ 'Malayalam': {'login': 'നിങ്ങളുടെ ഉപയോക്തൃനാമവും പാസ്\u200cവേഡും നൽകി Login അമർത്തുക. പുതിയ അക്കൗണ്ടിന് ശരിയായ '
+                        'Registration തിരഞ്ഞെടുക്കുക.',
+               'patient_registration': 'നിങ്ങളുടെ വിവരങ്ങൾ നൽകുക, ഉപയോക്തൃനാമവും പാസ്\u200cവേഡും സൃഷ്ടിക്കുക, ഭാഷ '
+                                       'തിരഞ്ഞെടുക്കുക, അക്കൗണ്ട് സൃഷ്ടിക്കുക.',
+               'provider_registration': 'വ്യക്തിഗതവും പ്രൊഫഷണൽ വിവരങ്ങളും നൽകുക, ആവശ്യമായ യോഗ്യതാ വിവരങ്ങൾ/രേഖ നൽകുക, '
+                                        'Submit ചെയ്യുക. അഡ്മിൻ പരിശോധന ആവശ്യമായേക്കാം.',
+               'home': 'ഡാഷ്ബോർഡിൽ നിങ്ങളുടെ നില കാണുക. Games, Reminders, History, Details, Reports എന്നിവ മെനുവിൽ '
+                       'നിന്ന് തുറക്കുക.',
+               'games': 'ഒരു ഗെയിം തിരഞ്ഞെടുക്കുക. തുടങ്ങുന്നതിന് മുമ്പ് നിർദ്ദേശങ്ങൾ വായിക്കുക. എല്ലാ റൗണ്ടുകളും '
+                        'ശ്രദ്ധയോടെ പൂർത്തിയാക്കുക.',
+               'memory': '10 സെക്കന്റ് നമ്പറുകൾ ശ്രദ്ധിച്ച് കാണുക. മറഞ്ഞ ശേഷം അതേ ക്രമത്തിൽ നൽകുക.',
+               'pattern': 'പാറ്റേൺ ശ്രദ്ധിച്ച് കാണുക. മറഞ്ഞ ശേഷം നിർദ്ദേശപ്രകാരം വീണ്ടും ഉണ്ടാക്കുക.',
+               'attention': 'സ്ക്രീൻ ശ്രദ്ധിക്കുക. ലക്ഷ്യം കാണുമ്പോൾ നിർദ്ദേശപ്രകാരം പ്രതികരിക്കുക.',
+               'image': 'കൗണ്ട്ഡൗൺ സമയത്ത് ചിത്രങ്ങൾ കാണുക. അത് കഴിഞ്ഞാൽ ശരിയായ ഉത്തരം തിരഞ്ഞെടുക്കുക.',
+               'schulte': '1 മുതൽ തുടങ്ങി നമ്പറുകൾ ക്രമത്തിൽ കണ്ടെത്തി അമർത്തുക.',
+               'spot': 'രണ്ടു വശങ്ങളും ശ്രദ്ധിച്ച് നോക്കുക. വ്യത്യസ്തമായ വസ്തു കണ്ടെത്തി തിരഞ്ഞെടുക്കുക.',
+               'hidden': 'ചിത്രത്തിലെ മറഞ്ഞിരിക്കുന്ന വസ്തുക്കൾ കണ്ടെത്തി ലക്ഷ്യത്തിൽ ടാപ്പ് ചെയ്യുക.',
+               'target': 'ഗ്രിഡിൽ ലക്ഷ്യം കുറച്ച് സമയം കാണും. അത് അപ്രത്യക്ഷമാകുന്നതിന് മുമ്പ് ടാപ്പ് ചെയ്യുക.',
+               'reminders': 'പേരും സമയവും നൽകി Reminder ചേർക്കുക. ആവശ്യമില്ലാത്തവ നീക്കം ചെയ്യുക.',
+               'history': 'മുൻ ഗെയിം സ്കോറുകളും പ്രകടനവും കാണുക. നിങ്ങളുടെ പുരോഗതി പരിശോധിക്കുക.',
+               'details': 'നിങ്ങളുടെ പ്രൊഫൈൽ, ഭാഷ, ബന്ധിപ്പിച്ച ഡോക്ടർ/കെയർടേക്കർ, മറ്റ് വിവരങ്ങൾ കാണുക.',
+               'reports': 'ലഭ്യമായ റിപ്പോർട്ടുകൾ തുറന്ന് രേഖപ്പെടുത്തിയ പ്രകടനം പരിശോധിക്കുക.'},
+ 'Punjabi': {'login': 'ਆਪਣਾ ਯੂਜ਼ਰਨੇਮ ਅਤੇ ਪਾਸਵਰਡ ਭਰੋ ਅਤੇ Login ਦਬਾਓ। ਨਵਾਂ ਖਾਤਾ ਬਣਾਉਣ ਲਈ ਸਹੀ Registration ਚੁਣੋ.',
+             'patient_registration': 'ਆਪਣੀ ਜਾਣਕਾਰੀ ਭਰੋ, ਯੂਜ਼ਰਨੇਮ ਅਤੇ ਪਾਸਵਰਡ ਬਣਾਓ, ਭਾਸ਼ਾ ਚੁਣੋ ਅਤੇ ਖਾਤਾ ਬਣਾਓ.',
+             'provider_registration': 'ਨਿੱਜੀ ਅਤੇ ਪੇਸ਼ੇਵਰ ਜਾਣਕਾਰੀ ਭਰੋ, ਲੋੜੀਂਦੀ ਯੋਗਤਾ ਦੀ ਜਾਣਕਾਰੀ/ਦਸਤਾਵੇਜ਼ ਦਿਓ ਅਤੇ Submit '
+                                      'ਕਰੋ। ਐਡਮਿਨ ਜਾਂਚ ਲੋੜੀਂਦੀ ਹੋ ਸਕਦੀ ਹੈ.',
+             'home': "ਡੈਸ਼ਬੋਰਡ 'ਤੇ ਆਪਣੀ ਸਥਿਤੀ ਵੇਖੋ। Games, Reminders, History, Details ਅਤੇ Reports ਮੀਨੂ ਤੋਂ ਖੋਲ੍ਹੋ.",
+             'games': 'ਇੱਕ ਗੇਮ ਚੁਣੋ ਅਤੇ ਸ਼ੁਰੂ ਕਰਨ ਤੋਂ ਪਹਿਲਾਂ ਹਦਾਇਤਾਂ ਪੜ੍ਹੋ। ਸਾਰੇ ਰਾਊਂਡ ਧਿਆਨ ਨਾਲ ਪੂਰੇ ਕਰੋ.',
+             'memory': '10 ਸਕਿੰਟ ਲਈ ਨੰਬਰ ਧਿਆਨ ਨਾਲ ਵੇਖੋ। ਲੁਕਣ ਤੋਂ ਬਾਅਦ ਉਹੀ ਕ੍ਰਮ ਵਿੱਚ ਦਰਜ ਕਰੋ.',
+             'pattern': 'ਪੈਟਰਨ ਵੇਖੋ। ਲੁਕਣ ਤੋਂ ਬਾਅਦ ਹਦਾਇਤ ਅਨੁਸਾਰ ਦੁਬਾਰਾ ਬਣਾਓ.',
+             'attention': "ਸਕ੍ਰੀਨ ਵੇਖੋ ਅਤੇ ਟਾਰਗੇਟ ਆਉਣ 'ਤੇ ਹਦਾਇਤ ਅਨੁਸਾਰ ਜਵਾਬ ਦਿਓ.",
+             'image': 'ਕਾਊਂਟਡਾਊਨ ਦੌਰਾਨ ਤਸਵੀਰਾਂ ਵੇਖੋ। ਖਤਮ ਹੋਣ ਤੋਂ ਬਾਅਦ ਸਹੀ ਜਵਾਬ ਚੁਣੋ.',
+             'schulte': '1 ਤੋਂ ਸ਼ੁਰੂ ਕਰਕੇ ਨੰਬਰ ਕ੍ਰਮ ਵਿੱਚ ਲੱਭੋ ਅਤੇ ਦਬਾਓ.',
+             'spot': 'ਦੋਵੇਂ ਪਾਸੇ ਧਿਆਨ ਨਾਲ ਵੇਖੋ। ਵੱਖਰੀ ਚੀਜ਼ ਲੱਭ ਕੇ ਚੁਣੋ.',
+             'hidden': "ਤਸਵੀਰ ਵਿੱਚ ਲੁਕੀਆਂ ਚੀਜ਼ਾਂ ਲੱਭੋ ਅਤੇ ਟਾਰਗੇਟ 'ਤੇ ਟੈਪ ਕਰੋ.",
+             'target': 'ਗ੍ਰਿਡ ਵਿੱਚ ਟਾਰਗੇਟ ਥੋੜ੍ਹੇ ਸਮੇਂ ਲਈ ਦਿਖੇਗਾ। ਗਾਇਬ ਹੋਣ ਤੋਂ ਪਹਿਲਾਂ ਟੈਪ ਕਰੋ.',
+             'reminders': 'ਨਾਮ ਅਤੇ ਸਮਾਂ ਦੇ ਕੇ Reminder ਜੋੜੋ। ਲੋੜ ਨਾ ਹੋਣ ਵਾਲੇ ਮਿਟਾਓ.',
+             'history': 'ਪਿਛਲੀਆਂ ਗੇਮਾਂ ਦੇ ਸਕੋਰ ਅਤੇ ਪ੍ਰਦਰਸ਼ਨ ਵੇਖੋ ਅਤੇ ਆਪਣੀ ਤਰੱਕੀ ਜਾਂਚੋ.',
+             'details': 'ਆਪਣੀ ਪ੍ਰੋਫਾਈਲ, ਭਾਸ਼ਾ, ਜੁੜੇ ਡਾਕਟਰ/ਕੇਅਰਟੇਕਰ ਅਤੇ ਹੋਰ ਜਾਣਕਾਰੀ ਵੇਖੋ.',
+             'reports': 'ਉਪਲਬਧ ਰਿਪੋਰਟ ਖੋਲ੍ਹੋ ਅਤੇ ਦਰਜ ਕੀਤਾ ਪ੍ਰਦਰਸ਼ਨ ਵੇਖੋ.'},
+ 'Urdu': {'login': 'اپنا یوزرنیم اور پاس ورڈ درج کریں اور Login دبائیں۔ نئے اکاؤنٹ کے لیے مناسب Registration منتخب '
+                   'کریں۔',
+          'patient_registration': 'اپنی معلومات درج کریں، یوزرنیم اور پاس ورڈ بنائیں، زبان منتخب کریں اور اکاؤنٹ '
+                                  'بنائیں۔',
+          'provider_registration': 'ذاتی اور پیشہ ورانہ معلومات درج کریں، مطلوبہ اہلیت کی معلومات/دستاویز دیں اور '
+                                   'Submit کریں۔ ایڈمن کی تصدیق ضروری ہو سکتی ہے۔',
+          'home': 'ڈیش بورڈ پر اپنی حالت دیکھیں۔ Games، Reminders، History، Details اور Reports مینو سے کھولیں۔',
+          'games': 'ایک گیم منتخب کریں اور شروع کرنے سے پہلے ہدایات پڑھیں۔ تمام راؤنڈ احتیاط سے مکمل کریں۔',
+          'memory': '10 سیکنڈ تک نمبرز دیکھیں۔ چھپنے کے بعد انہیں اسی ترتیب میں درج کریں۔',
+          'pattern': 'پیٹرن دیکھیں۔ چھپنے کے بعد ہدایات کے مطابق دوبارہ بنائیں۔',
+          'attention': 'اسکرین دیکھیں اور ہدف ظاہر ہونے پر ہدایات کے مطابق جواب دیں۔',
+          'image': 'کاؤنٹ ڈاؤن کے دوران تصاویر دیکھیں۔ ختم ہونے کے بعد درست جواب منتخب کریں۔',
+          'schulte': '1 سے شروع کرکے نمبرز ترتیب سے تلاش کریں اور دبائیں۔',
+          'spot': 'دونوں طرف غور سے دیکھیں۔ مختلف چیز تلاش کرکے منتخب کریں۔',
+          'hidden': 'تصویر میں چھپی چیزیں تلاش کریں اور ہدف پر ٹیپ کریں۔',
+          'target': 'گرڈ میں ہدف تھوڑی دیر کے لیے نظر آئے گا۔ غائب ہونے سے پہلے اسے ٹیپ کریں۔',
+          'reminders': 'نام اور وقت کے ساتھ Reminder شامل کریں۔ غیر ضروری Reminder حذف کریں۔',
+          'history': 'پچھلے گیمز کے اسکور اور کارکردگی دیکھیں اور اپنی پیش رفت جانچیں۔',
+          'details': 'اپنی پروفائل، زبان، منسلک ڈاکٹر/کیئرٹیکر اور دیگر معلومات دیکھیں۔',
+          'reports': 'دستیاب رپورٹس کھولیں اور ریکارڈ شدہ کارکردگی دیکھیں۔'},
+ 'Nepali': {'login': 'आफ्नो प्रयोगकर्ता नाम र पासवर्ड लेखेर Login थिच्नुहोस्। नयाँ खाताका लागि सही Registration '
+                     'छान्नुहोस्।',
+            'patient_registration': 'आफ्नो विवरण भर्नुहोस्, प्रयोगकर्ता नाम र पासवर्ड बनाउनुहोस्, भाषा छान्नुहोस् र '
+                                    'खाता बनाउनुहोस्।',
+            'provider_registration': 'व्यक्तिगत र व्यावसायिक विवरण भर्नुहोस्, आवश्यक योग्यता जानकारी/कागजात दिनुहोस् र '
+                                     'Submit गर्नुहोस्। एडमिन प्रमाणीकरण आवश्यक हुन सक्छ।',
+            'home': 'ड्यासबोर्डमा आफ्नो अवस्था हेर्नुहोस्। Games, Reminders, History, Details र Reports मेनुबाट '
+                    'खोल्नुहोस्।',
+            'games': 'एउटा खेल छान्नुहोस् र सुरु गर्नुअघि निर्देशन पढ्नुहोस्। सबै राउन्ड ध्यानपूर्वक पूरा गर्नुहोस्।',
+            'memory': '१० सेकेन्डसम्म नम्बरहरू ध्यानपूर्वक हेर्नुहोस्। लुकेपछि उही क्रममा लेख्नुहोस्।',
+            'pattern': 'प्याटर्न हेर्नुहोस्। लुकेपछि निर्देशनअनुसार फेरि बनाउनुहोस्।',
+            'attention': 'स्क्रिन हेर्नुहोस् र लक्ष्य देखिँदा निर्देशनअनुसार प्रतिक्रिया दिनुहोस्।',
+            'image': 'काउन्टडाउनमा तस्बिरहरू हेर्नुहोस्। सकिएपछि सही उत्तर छान्नुहोस्।',
+            'schulte': '१ बाट सुरु गरेर नम्बरहरू क्रमसँग खोज्नुहोस् र थिच्नुहोस्।',
+            'spot': 'दुवै पक्ष ध्यानपूर्वक हेर्नुहोस्। फरक वस्तु खोजेर छान्नुहोस्।',
+            'hidden': 'तस्बिरमा लुकेका वस्तुहरू खोज्नुहोस् र लक्ष्यमा ट्याप गर्नुहोस्।',
+            'target': 'ग्रिडमा लक्ष्य केही समय देखिन्छ। हराउनुअघि ट्याप गर्नुहोस्।',
+            'reminders': 'नाम र समय दिएर Reminder थप्नुहोस्। आवश्यक नभएका हटाउनुहोस्।',
+            'history': 'अघिल्ला खेलका स्कोर र प्रदर्शन हेर्नुहोस् र आफ्नो प्रगति जाँच्नुहोस्।',
+            'details': 'आफ्नो प्रोफाइल, भाषा, जोडिएको डाक्टर/केयरटेकर र अन्य विवरण हेर्नुहोस्।',
+            'reports': 'उपलब्ध रिपोर्टहरू खोलेर रेकर्ड गरिएको प्रदर्शन हेर्नुहोस्।'}}
+
+INSTRUCTION_LABELS = {'English': 'Instructions',
+ 'Hindi': 'निर्देश',
+ 'Marathi': 'सूचना',
+ 'Bengali': 'নির্দেশনা',
+ 'Gujarati': 'સૂચનાઓ',
+ 'Tamil': 'வழிமுறைகள்',
+ 'Telugu': 'సూచనలు',
+ 'Kannada': 'ಸೂಚನೆಗಳು',
+ 'Malayalam': 'നിർദ്ദേശങ്ങൾ',
+ 'Punjabi': 'ਹਦਾਇਤਾਂ',
+ 'Urdu': 'ہدایات',
+ 'Nepali': 'निर्देशनहरू',
+ 'French': 'Instructions',
+ 'Spanish': 'Instrucciones',
+ 'German': 'Anleitung',
+ 'Italian': 'Istruzioni',
+ 'Portuguese': 'Instruções',
+ 'Arabic': 'التعليمات',
+ 'Chinese': '使用说明',
+ 'Japanese': '説明',
+ 'Korean': '안내',
+ 'Russian': 'Инструкция',
+ 'Turkish': 'Talimatlar',
+ 'Assamese': 'নিৰ্দেশনা',
+ 'Bodo': 'Instruction',
+ 'Khasi': 'Jingbthah',
+ 'Mizo': 'Thuchhuah',
+ 'Meitei (Manipuri)': 'Instruction'}
+
+def instruction_text(key, language):
+    language_data = INSTRUCTION_TRANSLATIONS.get(
+        language,
+        INSTRUCTION_TRANSLATIONS["English"]
+    )
+    return language_data.get(
+        key,
+        INSTRUCTION_TRANSLATIONS["English"].get(key, "")
+    )
+
+def show_instructions(key, language, expanded=False):
+    title = INSTRUCTION_LABELS.get(language, "Instructions")
+    message = instruction_text(key, language)
+    if message:
+        with st.expander("📘 " + title, expanded=expanded):
+            st.info(message)
+
+
+
+# ============================================================
 # PASSWORD
 # ============================================================
 
@@ -1713,36 +2351,19 @@ def queue_voice(
 
 
 def play_pending_voice():
-
-    message = st.session_state.get(
-        "pending_voice_message"
-    )
-
-    language = st.session_state.get(
-        "pending_voice_language",
-        "English"
-    )
+    message = st.session_state.get("pending_voice_message")
+    language = st.session_state.get("pending_voice_language", "English")
 
     if not message:
         return
 
-    # Clear first so the same message isn't played
-    # on every rerun.
     st.session_state.pending_voice_message = None
     st.session_state.pending_voice_language = None
 
-    html = generate_voice_html(
-        message,
-        language
-    )
+    html = generate_voice_html(message, language)
 
     if html:
-
-        st.html(
-            html,
-            width=1,
-            unsafe_allow_javascript=True
-        )
+        st.markdown(html, unsafe_allow_html=True)
 
 
 def announce(
@@ -2026,9 +2647,6 @@ DEFAULT_SESSION_VALUES = {
     "tracker_hits": 0,
     "tracker_target_pos": None,
     "tracker_target_start": None,
-    "tracker_target_visible": False,
-    "tracker_next_round_at": None,
-    "tracker_feedback": "",
 }
 
 
@@ -2068,6 +2686,19 @@ if not st.session_state.logged_in:
         "It is not a medical diagnostic system."
     )
 
+    # Choose a language before login so even first-time users can read the
+    # login and registration instructions in their preferred language.
+    if "prelogin_language" not in st.session_state:
+        st.session_state.prelogin_language = "English"
+
+    prelogin_language = st.selectbox(
+        "🌐 Language / भाषा",
+        list(LANGUAGES.keys()),
+        key="prelogin_language"
+    )
+
+    show_instructions("login", prelogin_language, expanded=True)
+
     login_tab, signup_tab, doctor_signup_tab, caretaker_signup_tab = st.tabs(
         [
             "🔐 Login",
@@ -2084,6 +2715,7 @@ if not st.session_state.logged_in:
     with login_tab:
 
         st.subheader("Login")
+        show_instructions("login", prelogin_language)
 
         username = st.text_input(
             "Username",
@@ -2512,7 +3144,9 @@ if not st.session_state.logged_in:
                 if existing:
                     st.error("Username already exists.")
                 else:
-
+                    # Store file bytes for document download/verification
+                    doc_document_bytes = doc_document.getvalue() if doc_document else None
+                    
                     conn.execute(
                         """
                         INSERT INTO users(
@@ -2679,6 +3313,11 @@ with brand_col1:
 with brand_col2:
     st.markdown(f"# {APP_NAME}")
     st.caption("Bridging Memory, Care & Connection")
+
+# A simple instruction is also shown for administrator, doctor and caretaker
+# portals. It uses the language saved for the logged-in account.
+if role in ("admin", "doctor", "caretaker"):
+    show_instructions("home", language, expanded=False)
 
 
 # ============================================================
@@ -4632,6 +5271,25 @@ selected_page = st.radio(
 
 st.session_state.page = selected_page
 
+# ------------------------------------------------------------
+# PAGE-BY-PAGE SIMPLE INSTRUCTIONS
+# ------------------------------------------------------------
+# The user sees the instructions for the page they are currently using.
+page_instruction_keys = {
+    "home": "home",
+    "games": "games",
+    "reminders": "reminders",
+    "history": "history",
+    "details": "details",
+    "reports": "reports",
+}
+if selected_page in page_instruction_keys:
+    show_instructions(
+        page_instruction_keys[selected_page],
+        language,
+        expanded=False
+    )
+
 
 # ============================================================
 # MULTI-ROUND GAME SETTINGS
@@ -4707,9 +5365,6 @@ def reset_tracker_game():
     st.session_state.tracker_hits = 0
     st.session_state.tracker_target_pos = None
     st.session_state.tracker_target_start = None
-    st.session_state.tracker_target_visible = False
-    st.session_state.tracker_next_round_at = None
-    st.session_state.tracker_feedback = ""
 
 
 def exit_current_game(game_name):
@@ -5193,6 +5848,22 @@ elif selected_page == "games":
     )
 
     st.divider()
+
+    game_instruction_keys = {
+        "Memory Sequence": "memory",
+        "Pattern Memory": "pattern",
+        "Attention Game": "attention",
+        "Image Recognition": "image",
+        "Schulte Table": "schulte",
+        "Spot the Difference": "spot",
+        "Hidden Object Search": "hidden",
+        "Target Tracker": "target",
+    }
+    show_instructions(
+        game_instruction_keys.get(active_game, "games"),
+        language,
+        expanded=True
+    )
 
     # ========================================================
     # MEMORY SEQUENCE
@@ -6271,211 +6942,159 @@ elif selected_page == "games":
 
         tracker_rounds = {1: 10, 2: 15, 3: 20}[difficulty]
         tracker_size = {1: 4, 2: 5, 3: 6}[difficulty]
+        # Target is visible for exactly 2 seconds at every difficulty level.
+        # The autorefresh below updates the timer and removes the target when
+        # the 2-second visibility window expires.
         target_duration = 2.0
-        hidden_gap = 0.5
 
-        # --------------------------------------------------------
-        # START GAME
-        # --------------------------------------------------------
         if not st.session_state.tracker_running:
-            if st.button(
-                "▶️ Start Target Tracker",
-                type="primary",
-                use_container_width=True,
-                key="tracker_start"
-            ):
+            if st.button("▶️ Start Target Tracker", type="primary", use_container_width=True):
                 st.session_state.tracker_round = 1
                 st.session_state.tracker_hits = 0
-                st.session_state.tracker_target_pos = random.randrange(
-                    tracker_size * tracker_size
-                )
-                st.session_state.tracker_target_start = pytime.monotonic()
-                st.session_state.tracker_target_visible = True
-                st.session_state.tracker_next_round_at = None
-                st.session_state.tracker_feedback = ""
+                st.session_state.tracker_target_pos = random.randrange(tracker_size * tracker_size)
+                st.session_state.tracker_target_start = pytime.time()
                 st.session_state.tracker_running = True
                 st.rerun()
-
-        # --------------------------------------------------------
-        # ACTIVE GAME
-        # --------------------------------------------------------
         else:
-            # The game MUST rerun repeatedly. Without this, Python time does
-            # not update on the browser because Streamlit only redraws after
-            # an interaction or a rerun.
-            if st_autorefresh is None:
-                st.error(
-                    "Target Tracker needs streamlit-autorefresh for its timer. "
-                    "Add streamlit-autorefresh to requirements.txt and redeploy."
-                )
-            else:
+            # Refresh once per second. Frequent 250 ms redraws can make
+            # Streamlit Cloud look faded/flickery while the page rerenders.
+            if st_autorefresh is not None:
                 st_autorefresh(
-                    interval=200,
-                    limit=None,
-                    key=f"target_tracker_refresh_{user_id}"
+                    interval=1000,
+                    limit=10,
+                    key=f"target_tracker_timer_{st.session_state.tracker_round}"
                 )
 
-            now = pytime.monotonic()
+            start_time = st.session_state.tracker_target_start
+            if start_time is None:
+                start_time = pytime.time()
+                st.session_state.tracker_target_start = start_time
 
-            # ----------------------------------------------------
-            # SHORT HIDDEN GAP AFTER A MISS
-            # ----------------------------------------------------
-            if not st.session_state.tracker_target_visible:
-                next_at = st.session_state.tracker_next_round_at
+            elapsed = pytime.time() - float(start_time)
+            remaining = max(0.0, target_duration - elapsed)
 
-                if next_at is not None and now >= float(next_at):
-                    # Start the next round only AFTER the old target has
-                    # actually disappeared from the screen.
-                    if st.session_state.tracker_round >= tracker_rounds:
-                        score = 100.0 * st.session_state.tracker_hits / tracker_rounds
-                        old_d, new_d, _ = update_adaptive_difficulty(user_id, score)
-                        save_completed_game("Target Tracker", score)
-                        st.session_state.game_result_message = game_result_voice(
-                            "Target Tracker", score, old_d, new_d, language
-                        )
-                        st.session_state.game_result_score = round(score, 1)
-                        st.session_state.game_result_old_difficulty = old_d
-                        st.session_state.game_result_new_difficulty = new_d
-                        st.session_state.tracker_running = False
-                        st.session_state.tracker_next_round_at = None
-                        st.session_state.tracker_feedback = (
-                            f"🎉 Target Tracker completed! "
-                            f"Hits: {st.session_state.tracker_hits}/{tracker_rounds}"
-                        )
-                        st.rerun()
-                    else:
-                        st.session_state.tracker_round += 1
-                        st.session_state.tracker_target_pos = random.randrange(
-                            tracker_size * tracker_size
-                        )
-                        st.session_state.tracker_target_start = pytime.monotonic()
-                        st.session_state.tracker_target_visible = True
-                        st.session_state.tracker_next_round_at = None
-                        st.session_state.tracker_feedback = ""
-                        st.rerun()
+            # Image-Recognition-style whole-second countdown: 2 -> 1 -> 0.
+            # No math.ceil() is used here.
+            countdown = max(0, int(remaining + 0.999999))
+
+            st.markdown(
+                f"""
+                <div style="
+                    text-align:center;
+                    font-size:30px;
+                    font-weight:700;
+                    margin:12px 0;
+                    padding:8px;
+                ">
+                    ⏱️ Target disappears in: {countdown}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            st.caption(
+                f"Round {st.session_state.tracker_round}/{tracker_rounds} "
+                f"• Hits: {st.session_state.tracker_hits}"
+            )
+
+            # Check expiry BEFORE rendering the target buttons. This means
+            # an expired target can never remain visible on the screen.
+            if remaining <= 0:
+                if st.session_state.tracker_round >= tracker_rounds:
+                    score = (
+                        100.0
+                        * st.session_state.tracker_hits
+                        / tracker_rounds
+                    )
+                    old_d, new_d, _ = update_adaptive_difficulty(
+                        user_id, score
+                    )
+                    save_completed_game(
+                        "Target Tracker", score
+                    )
+                    st.session_state.game_result_message = game_result_voice(
+                        "Target Tracker", score, old_d, new_d, language
+                    )
+                    st.session_state.game_result_score = round(score, 1)
+                    st.session_state.game_result_old_difficulty = old_d
+                    st.session_state.game_result_new_difficulty = new_d
+                    st.session_state.tracker_running = False
+                    st.success(
+                        f"🎉 Target Tracker completed. Hits: "
+                        f"{st.session_state.tracker_hits}/{tracker_rounds}"
+                    )
                 else:
-                    st.info("👀 Target disappeared — get ready for the next target...")
-
-            # ----------------------------------------------------
-            # TARGET VISIBLE
-            # ----------------------------------------------------
-            else:
-                start_time = st.session_state.tracker_target_start
-                if start_time is None:
-                    # Safety recovery for old/stale sessions.
-                    st.session_state.tracker_target_start = pytime.monotonic()
-                    start_time = st.session_state.tracker_target_start
-
-                elapsed = max(0.0, now - float(start_time))
-                remaining = max(0.0, target_duration - elapsed)
-
-                st.progress(
-                    min(1.0, elapsed / target_duration),
-                    text=f"Round {st.session_state.tracker_round}/{tracker_rounds}"
-                )
-                st.caption(
-                    f"Round {st.session_state.tracker_round}/{tracker_rounds} • "
-                    f"Hits: {st.session_state.tracker_hits} • "
-                    f"Target disappears in {remaining:.1f}s"
-                )
-
-                # IMPORTANT: remove the target immediately when its timer ends.
-                if remaining <= 0:
-                    st.session_state.tracker_target_visible = False
-                    st.session_state.tracker_next_round_at = now + hidden_gap
-                    st.session_state.tracker_target_start = None
-                    st.session_state.tracker_feedback = "⏱️ Target disappeared!"
+                    # The old target is discarded before a new one is drawn.
+                    st.session_state.tracker_round += 1
+                    st.session_state.tracker_target_pos = random.randrange(
+                        tracker_size * tracker_size
+                    )
+                    st.session_state.tracker_target_start = pytime.time()
                     st.rerun()
 
-                # ------------------------------------------------
-                # GRID
-                # ------------------------------------------------
-                else:
-                    for r in range(tracker_size):
-                        cols = st.columns(tracker_size)
-                        for c in range(tracker_size):
-                            idx = r * tracker_size + c
-                            with cols[c]:
-                                label = (
-                                    "🎯"
-                                    if idx == st.session_state.tracker_target_pos
-                                    else "·"
+            else:
+                # Draw the target ONLY while its 2-second visibility window
+                # is active.
+                for r in range(tracker_size):
+                    cols = st.columns(tracker_size)
+                    for c in range(tracker_size):
+                        idx = r * tracker_size + c
+                        with cols[c]:
+                            label = (
+                                "🎯"
+                                if idx == st.session_state.tracker_target_pos
+                                else "·"
+                            )
+                            if st.button(
+                                label,
+                                key=(
+                                    f"tracker_{st.session_state.tracker_round}_{idx}"
+                                ),
+                                use_container_width=True,
+                            ):
+                                # Double-check elapsed time at click time so a
+                                # late click cannot score after the 2 seconds.
+                                click_elapsed = (
+                                    pytime.time()
+                                    - float(st.session_state.tracker_target_start)
                                 )
+                                if click_elapsed >= target_duration:
+                                    st.rerun()
 
-                                if st.button(
-                                    label,
-                                    key=(
-                                        f"tracker_{st.session_state.tracker_round}_"
-                                        f"{idx}"
-                                    ),
-                                    use_container_width=True
-                                ):
-                                    # Ignore clicks if the target expired between
-                                    # rendering and the user's click.
-                                    click_elapsed = pytime.monotonic() - float(start_time)
-                                    if click_elapsed >= target_duration:
-                                        st.session_state.tracker_target_visible = False
-                                        st.session_state.tracker_next_round_at = (
-                                            pytime.monotonic() + hidden_gap
+                                elif idx == st.session_state.tracker_target_pos:
+                                    st.session_state.tracker_hits += 1
+                                    st.session_state.tracker_round += 1
+
+                                    if st.session_state.tracker_round > tracker_rounds:
+                                        score = (
+                                            100.0
+                                            * st.session_state.tracker_hits
+                                            / tracker_rounds
                                         )
-                                        st.session_state.tracker_target_start = None
-                                        st.session_state.tracker_feedback = "⏱️ Too late — target disappeared!"
-                                        st.rerun()
+                                        old_d, new_d, _ = update_adaptive_difficulty(
+                                            user_id, score
+                                        )
+                                        save_completed_game(
+                                            "Target Tracker", score
+                                        )
+                                        st.session_state.game_result_message = game_result_voice(
+                                            "Target Tracker", score, old_d, new_d, language
+                                        )
+                                        st.session_state.game_result_score = round(score, 1)
+                                        st.session_state.game_result_old_difficulty = old_d
+                                        st.session_state.game_result_new_difficulty = new_d
+                                        st.session_state.tracker_running = False
+                                    else:
+                                        st.session_state.tracker_target_pos = random.randrange(
+                                            tracker_size * tracker_size
+                                        )
+                                        st.session_state.tracker_target_start = pytime.time()
+                                    st.rerun()
 
-                                    if idx == st.session_state.tracker_target_pos:
-                                        st.session_state.tracker_hits += 1
-                                        st.session_state.tracker_target_visible = False
-                                        st.session_state.tracker_target_start = None
-                                        st.session_state.tracker_round += 1
-
-                                        if st.session_state.tracker_round > tracker_rounds:
-                                            score = (
-                                                100.0
-                                                * st.session_state.tracker_hits
-                                                / tracker_rounds
-                                            )
-                                            old_d, new_d, _ = update_adaptive_difficulty(
-                                                user_id, score
-                                            )
-                                            save_completed_game("Target Tracker", score)
-                                            st.session_state.game_result_message = game_result_voice(
-                                                "Target Tracker", score, old_d, new_d, language
-                                            )
-                                            st.session_state.game_result_score = round(score, 1)
-                                            st.session_state.game_result_old_difficulty = old_d
-                                            st.session_state.game_result_new_difficulty = new_d
-                                            st.session_state.tracker_running = False
-                                            st.session_state.tracker_next_round_at = None
-                                            st.session_state.tracker_feedback = (
-                                                f"🎉 Target Tracker completed! "
-                                                f"Hits: {st.session_state.tracker_hits}/{tracker_rounds}"
-                                            )
-                                        else:
-                                            # Small hidden gap makes the target
-                                            # visibly disappear before the next one.
-                                            st.session_state.tracker_next_round_at = (
-                                                pytime.monotonic() + hidden_gap
-                                            )
-                                            st.session_state.tracker_feedback = "✅ Target hit!"
-
-                                        st.rerun()
-
-            if st.session_state.tracker_feedback:
-                st.caption(st.session_state.tracker_feedback)
-
-            if st.button(
-                "⏹️ Exit Target Tracker",
-                key="tracker_exit",
-                use_container_width=True
-            ):
-                reset_tracker_game()
+            if st.button("⏹️ Exit Target Tracker"):
+                st.session_state.tracker_running = False
                 st.rerun()
 
-
-# ============================================================
-
-
-                # =================================================
 
 # ============================================================
 # REMINDERS
