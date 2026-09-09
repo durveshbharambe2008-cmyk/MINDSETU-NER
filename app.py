@@ -4088,124 +4088,114 @@ if role == "admin":
         st.divider()
         st.subheader("🔗 Admin Assignment — Doctor, Caretaker & Patient")
         st.caption(
-            "Only the administrator assigns caretakers to doctors and patients to doctors/caretakers. "
-            "A doctor becomes available here after qualification verification and activation."
+            "Only the administrator controls assignments. Caretakers can be linked to a registered doctor, "
+            "while patient-to-doctor assignment is enabled only for active doctors."
         )
 
-        # Normalize status text so older PostgreSQL rows containing different
-        # capitalization/extra spaces do not disappear from the assignment list.
-        # 'Not Required' is accepted for legacy doctor accounts created before
-        # qualification verification was introduced.
-        active_doctors = conn.execute(
-            """
-            SELECT id, name
-            FROM users
-            WHERE role='doctor'
-              AND LOWER(TRIM(COALESCE(account_status, '')))='active'
-              AND LOWER(TRIM(COALESCE(qualification_status, ''))) IN ('verified', 'not required')
-            ORDER BY name
-            """
-        ).fetchall()
-
-        pending_doctors_for_assignment = conn.execute(
-            """
-            SELECT id, name, qualification_status, account_status
-            FROM users
-            WHERE role='doctor'
-              AND LOWER(TRIM(COALESCE(qualification_status, '')))='pending'
-            ORDER BY name
-            """
-        ).fetchall()
-
+        # --------------------------------------------------------
+        # LOAD ALL PROVIDERS FIRST
+        # --------------------------------------------------------
+        # IMPORTANT FIX:
+        # The old code placed BOTH assignment controls inside
+        # `if active_doctors:`. When a doctor was registered but still
+        # pending verification, the caretaker-to-doctor controls vanished
+        # completely. The caretaker assignment is now independent of the
+        # patient assignment and is rendered whenever a doctor is registered.
         all_doctors = conn.execute(
             """
-            SELECT id, name, qualification_status, account_status
+            SELECT id, name, qualification_status, account_status, doctor_id_for_caretaker
             FROM users
-            WHERE role='doctor'
+            WHERE LOWER(TRIM(COALESCE(role, '')))='doctor'
             ORDER BY name
             """
         ).fetchall()
+
+        active_doctors = [
+            d for d in all_doctors
+            if str(d[3] or '').strip().lower() == 'active'
+            and str(d[2] or '').strip().lower() in ('verified', 'not required')
+        ]
+
+        pending_doctors_for_assignment = [
+            d for d in all_doctors
+            if str(d[2] or '').strip().lower() == 'pending'
+        ]
+
+        # For caretaker -> doctor linking, a registered doctor is selectable
+        # unless the doctor has explicitly been rejected. This allows the
+        # administrator to prepare the relationship before activation and,
+        # most importantly, prevents the assignment controls from disappearing.
+        caretaker_doctors = [
+            d for d in all_doctors
+            if str(d[2] or '').strip().lower() != 'rejected'
+            and str(d[3] or '').strip().lower() != 'rejected'
+        ]
 
         active_caretakers = conn.execute(
             """
             SELECT id, name, doctor_id_for_caretaker
             FROM users
-            WHERE role='caretaker'
+            WHERE LOWER(TRIM(COALESCE(role, '')))='caretaker'
               AND LOWER(TRIM(COALESCE(account_status, '')))='active'
             ORDER BY name
             """
         ).fetchall()
 
         all_patients = conn.execute(
-            "SELECT id, name, username, doctor_id, caretaker_id FROM users WHERE role='patient' ORDER BY name"
+            """
+            SELECT id, name, username, doctor_id, caretaker_id
+            FROM users
+            WHERE LOWER(TRIM(COALESCE(role, '')))='patient'
+            ORDER BY name
+            """
         ).fetchall()
 
-        if not active_doctors:
+        # --------------------------------------------------------
+        # PATIENT -> DOCTOR / CARETAKER ASSIGNMENT
+        # --------------------------------------------------------
+        st.markdown("### 👥 Patient Assignment")
+        st.caption(
+            "Doctor and caretaker selectors are always shown when provider records exist. "
+            "A doctor must be verified and active before a patient can be assigned to that doctor."
+        )
+
+        # Always build the caretaker list independently. Do NOT hide the
+        # caretaker selector just because there is currently no active doctor.
+        all_caretakers = conn.execute(
+            """
+            SELECT id, name, account_status, doctor_id_for_caretaker
+            FROM users
+            WHERE LOWER(TRIM(COALESCE(role, '')))='caretaker'
+              AND LOWER(TRIM(COALESCE(account_status, ''))) <> 'rejected'
+            ORDER BY name
+            """
+        ).fetchall()
+
+        non_rejected_doctors = [
+            d for d in all_doctors
+            if str(d[2] or '').strip().lower() != 'rejected'
+            and str(d[3] or '').strip().lower() != 'rejected'
+        ]
+
+        if not all_doctors:
             st.warning(
-                "No eligible doctors are available for assignment yet. "
-                "Verify and activate a doctor in the Verification & Management section first."
+                "No doctor account is currently stored in this database. "
+                "The Doctor selector cannot contain a name until a doctor registration is saved. "
+                "Register the doctor first, then verify and activate the account in "
+                "Verification & Management."
             )
-
-            if pending_doctors_for_assignment:
-                st.info(
-                    f"{len(pending_doctors_for_assignment)} doctor(s) are waiting for qualification verification. "
-                    "You can verify them below without leaving the assignment section."
-                )
-                for d in pending_doctors_for_assignment:
-                    pc1, pc2, pc3 = st.columns([4, 2, 2])
-                    pc1.write(f"**Dr. {d[1]}** (ID {d[0]})")
-                    pc2.write(f"Qualification: {d[2]}")
-                    with pc3:
-                        if st.button(
-                            "✅ Verify & Activate",
-                            key=f"quick_verify_assignment_{d[0]}",
-                            type="primary",
-                            use_container_width=True
-                        ):
-                            card_no = f"MNE-DOC-{d[0]:05d}"
-                            conn.execute(
-                                """
-                                UPDATE users
-                                SET qualification_status='Verified',
-                                    account_status='Active',
-                                    id_card_number=?,
-                                    id_card_created_at=?
-                                WHERE id=? AND role='doctor'
-                                """,
-                                (card_no, datetime.now().isoformat(timespec="seconds"), d[0])
-                            )
-                            conn.commit()
-                            st.success(f"Dr. {d[1]} verified and activated. Assignment controls are now available.")
-                            st.rerun()
-
-            elif all_doctors:
-                st.info(
-                    "Doctors are registered, but none is currently eligible. "
-                    "Check the doctor qualification and account status in Verification & Management."
-                )
-                st.dataframe(
-                    [
-                        {
-                            "Doctor": f"Dr. {d[1]}",
-                            "ID": d[0],
-                            "Qualification": d[2] or "Not specified",
-                            "Account Status": d[3] or "Unknown",
-                            "Assignment": "Available" if d[0] in {x[0] for x in active_doctors} else "Not available",
-                        }
-                        for d in all_doctors
-                    ],
-                    use_container_width=True,
-                    hide_index=True
-                )
-            else:
-                st.info("No doctors are registered yet. Register a doctor first.")
         else:
-            doctor_options = {f"Dr. {d[1]} (ID {d[0]})": d[0] for d in active_doctors}
-            caretaker_options = {"Not assigned": None}
-            for c in active_caretakers:
-                caretaker_options[f"{c[1]} (ID {c[0]})"] = c[0]
+            # Show every non-rejected doctor so the administrator can always
+            # see what is happening. Patient assignment itself is restricted
+            # to active + verified doctors below.
+            doctor_status_options = {
+                f"Dr. {d[1]} (ID {d[0]}) — Qualification: {d[2] or 'Unknown'} — Account: {d[3] or 'Unknown'}": d[0]
+                for d in non_rejected_doctors
+            }
 
-            if not all_patients:
+            if not doctor_status_options:
+                st.warning("All registered doctors are rejected. A patient cannot be assigned until a doctor is approved.")
+            elif not all_patients:
                 st.info("No patients are registered yet. Register a patient first.")
             else:
                 assignment_patient_options = {
@@ -4213,110 +4203,276 @@ if role == "admin":
                     for p in all_patients
                 }
 
-                with st.form("admin_assignment_form"):
-                    selected_patient_label = st.selectbox(
-                        "Patient",
-                        list(assignment_patient_options.keys()),
-                        key="admin_assign_patient"
-                    )
-                    selected_doctor_label = st.selectbox(
-                        "Assign Doctor",
-                        list(doctor_options.keys()),
-                        key="admin_assign_doctor"
-                    )
-                    selected_caretaker_label = st.selectbox(
-                        "Assign Caretaker / Nurse",
-                        list(caretaker_options.keys()),
-                        key="admin_assign_caretaker"
-                    )
-                    submitted_assignment = st.form_submit_button(
-                        "💾 Save Patient Assignment",
-                        type="primary",
-                        use_container_width=True
-                    )
+                # Only active + verified doctors are valid for the actual
+                # patient assignment. Pending/rejected doctors remain visible
+                # in the provider status area rather than making the whole
+                # assignment UI disappear.
+                valid_doctor_options = {
+                    f"Dr. {d[1]} (ID {d[0]})": d[0]
+                    for d in active_doctors
+                }
 
-                if submitted_assignment:
-                    pid = assignment_patient_options[selected_patient_label]
-                    did = doctor_options[selected_doctor_label]
-                    cid = caretaker_options[selected_caretaker_label]
+                caretaker_options = {"Not assigned": None}
+                for c in all_caretakers:
+                    status = c[2] or "Unknown"
+                    caretaker_options[f"{c[1]} (ID {c[0]}) — {status}"] = c[0]
 
-                    if cid is not None:
-                        caretaker_doctor = conn.execute(
-                            "SELECT doctor_id_for_caretaker FROM users WHERE id=? AND role='caretaker'",
-                            (cid,)
+                if not valid_doctor_options:
+                    st.info(
+                        "Patient assignment is waiting for a doctor to be both Verified and Active. "
+                        "Use Verification & Management above to approve the registered doctor."
+                    )
+                else:
+                    with st.form("admin_assignment_form_v3"):
+                        selected_patient_label = st.selectbox(
+                            "Patient",
+                            list(assignment_patient_options.keys()),
+                            key="admin_assign_patient_v3"
+                        )
+                        selected_doctor_label = st.selectbox(
+                            "Assign Doctor",
+                            list(valid_doctor_options.keys()),
+                            key="admin_assign_doctor_v3"
+                        )
+                        selected_caretaker_label = st.selectbox(
+                            "Assign Caretaker / Nurse",
+                            list(caretaker_options.keys()),
+                            key="admin_assign_caretaker_v3"
+                        )
+                        submitted_assignment = st.form_submit_button(
+                            "💾 Save Patient Assignment",
+                            type="primary",
+                            use_container_width=True
+                        )
+
+                    if submitted_assignment:
+                        pid = assignment_patient_options[selected_patient_label]
+                        did = valid_doctor_options[selected_doctor_label]
+                        cid = caretaker_options[selected_caretaker_label]
+
+                        # Re-check the provider immediately before saving so a
+                        # stale Streamlit page cannot create an invalid assignment.
+                        doctor_check = conn.execute(
+                            """
+                            SELECT id, qualification_status, account_status
+                            FROM users
+                            WHERE id=?
+                              AND LOWER(TRIM(COALESCE(role, '')))='doctor'
+                            """,
+                            (did,)
                         ).fetchone()
-                        if not caretaker_doctor or caretaker_doctor[0] != did:
-                            st.error(
-                                "This caretaker/nurse is not assigned to the selected doctor. "
-                                "Assign the caretaker to that doctor first."
-                            )
+
+                        if not doctor_check:
+                            st.error("The selected doctor no longer exists. Refresh the page and try again.")
+                        elif str(doctor_check[1] or '').strip().lower() not in ('verified', 'not required'):
+                            st.error("The selected doctor is not qualification-verified yet.")
+                        elif str(doctor_check[2] or '').strip().lower() != 'active':
+                            st.error("The selected doctor is not active. Activate the account in Verification & Management.")
+                        elif cid is not None:
+                            caretaker_check = conn.execute(
+                                """
+                                SELECT id, account_status, doctor_id_for_caretaker
+                                FROM users
+                                WHERE id=?
+                                  AND LOWER(TRIM(COALESCE(role, '')))='caretaker'
+                                """,
+                                (cid,)
+                            ).fetchone()
+
+                            if not caretaker_check:
+                                st.error("The selected caretaker record no longer exists. Refresh the page and try again.")
+                            elif str(caretaker_check[1] or '').strip().lower() != 'active':
+                                st.error("Only an active caretaker/nurse can be assigned to a patient.")
+                            elif caretaker_check[2] != did:
+                                st.error(
+                                    "This caretaker/nurse is not linked to the selected doctor yet. "
+                                    "Use the Caretaker → Doctor section below first."
+                                )
+                            else:
+                                conn.execute(
+                                    """
+                                    UPDATE users
+                                    SET doctor_id=?, caretaker_id=?
+                                    WHERE id=?
+                                      AND LOWER(TRIM(COALESCE(role, '')))='patient'
+                                    """,
+                                    (did, cid, pid)
+                                )
+                                conn.commit()
+                                st.success("Patient assigned successfully to the selected doctor and caretaker.")
+                                st.rerun()
                         else:
                             conn.execute(
-                                "UPDATE users SET doctor_id=?, caretaker_id=? WHERE id=? AND role='patient'",
-                                (did, cid, pid)
+                                """
+                                UPDATE users
+                                SET doctor_id=?, caretaker_id=NULL
+                                WHERE id=?
+                                  AND LOWER(TRIM(COALESCE(role, '')))='patient'
+                                """,
+                                (did, pid)
                             )
                             conn.commit()
-                            st.success("Patient assigned successfully to the selected doctor and caretaker.")
+                            st.success("Patient assigned successfully to the selected doctor.")
                             st.rerun()
-                    else:
-                        conn.execute(
-                            "UPDATE users SET doctor_id=?, caretaker_id=NULL WHERE id=? AND role='patient'",
-                            (did, pid)
-                        )
-                        conn.commit()
-                        st.success("Patient assigned successfully to the selected doctor.")
-                        st.rerun()
 
+        # --------------------------------------------------------
+        # CARETAKER / NURSE -> DOCTOR ASSIGNMENT
+        # --------------------------------------------------------
         st.divider()
         st.subheader("🤝 Assign Caretaker / Nurse to Doctor")
-        unassigned_caretakers = conn.execute(
-            """
-            SELECT id, name
-            FROM users
-            WHERE role='caretaker'
-              AND LOWER(TRIM(COALESCE(account_status, '')))='active'
-            ORDER BY name
-            """
-        ).fetchall()
+        st.caption(
+            "This control is independent of patient assignment. It remains visible whenever provider records "
+            "exist, even when a doctor is still awaiting verification. Rejected accounts cannot be linked."
+        )
 
-        if unassigned_caretakers and active_doctors:
-            ct_opts = {f"{c[1]} (ID {c[0]})": c[0] for c in unassigned_caretakers}
-            doc_opts = {f"Dr. {d[1]} (ID {d[0]})": d[0] for d in active_doctors}
-            with st.form("admin_caretaker_doctor_form"):
+        if not non_rejected_doctors:
+            if all_doctors:
+                st.warning("All registered doctors are rejected. Register or approve another doctor before linking a caretaker.")
+            else:
+                st.info(
+                    "No doctor account is currently stored in the database. "
+                    "Register a doctor first; this assignment control will then show the doctor automatically."
+                )
+        elif not all_caretakers:
+            st.info(
+                "No caretaker/nurse account is currently available. Register a caretaker first; "
+                "this assignment control will then show the caretaker automatically."
+            )
+        else:
+            ct_opts = {
+                f"{c[1]} (ID {c[0]}) — {c[2] or 'Unknown status'}": c[0]
+                for c in all_caretakers
+            }
+            doc_opts = {
+                f"Dr. {d[1]} (ID {d[0]}) — Qualification: {d[2] or 'Unknown'} — Account: {d[3] or 'Unknown'}": d[0]
+                for d in non_rejected_doctors
+            }
+
+            with st.form("admin_caretaker_doctor_form_v3"):
                 ct_label = st.selectbox(
                     "Caretaker / Nurse",
                     list(ct_opts.keys()),
-                    key="admin_ct_doctor_ct"
+                    key="admin_ct_doctor_ct_v3"
                 )
                 dr_label = st.selectbox(
                     "Doctor",
                     list(doc_opts.keys()),
-                    key="admin_ct_doctor_dr"
+                    key="admin_ct_doctor_dr_v3"
                 )
                 save_ct = st.form_submit_button(
                     "🔗 Assign Caretaker to Doctor",
                     type="primary",
                     use_container_width=True
                 )
-            if save_ct:
-                conn.execute(
-                    "UPDATE users SET doctor_id_for_caretaker=? WHERE id=? AND role='caretaker'",
-                    (doc_opts[dr_label], ct_opts[ct_label])
-                )
-                conn.commit()
-                st.success("Caretaker / nurse assigned to doctor successfully.")
-                st.rerun()
-        elif active_doctors and not unassigned_caretakers:
-            st.info("No active caretaker/nurse accounts are available to assign. Register a caretaker first.")
 
+            if save_ct:
+                caretaker_id = ct_opts[ct_label]
+                doctor_id = doc_opts[dr_label]
+
+                doctor_check = conn.execute(
+                    """
+                    SELECT id, qualification_status, account_status
+                    FROM users
+                    WHERE id=?
+                      AND LOWER(TRIM(COALESCE(role, '')))='doctor'
+                    """,
+                    (doctor_id,)
+                ).fetchone()
+                caretaker_check = conn.execute(
+                    """
+                    SELECT id, account_status
+                    FROM users
+                    WHERE id=?
+                      AND LOWER(TRIM(COALESCE(role, '')))='caretaker'
+                    """,
+                    (caretaker_id,)
+                ).fetchone()
+
+                if not doctor_check:
+                    st.error("The selected doctor record no longer exists. Refresh and try again.")
+                elif str(doctor_check[1] or '').strip().lower() == 'rejected' or str(doctor_check[2] or '').strip().lower() == 'rejected':
+                    st.error("A rejected doctor cannot be assigned to a caretaker.")
+                elif not caretaker_check:
+                    st.error("The selected caretaker record no longer exists. Refresh and try again.")
+                elif str(caretaker_check[1] or '').strip().lower() != 'active':
+                    st.error("Only an active caretaker/nurse can be assigned.")
+                else:
+                    conn.execute(
+                        """
+                        UPDATE users
+                        SET doctor_id_for_caretaker=?
+                        WHERE id=?
+                          AND LOWER(TRIM(COALESCE(role, '')))='caretaker'
+                        """,
+                        (doctor_id, caretaker_id)
+                    )
+                    conn.commit()
+                    st.success("Caretaker / nurse assigned to doctor successfully.")
+                    st.rerun()
+
+        # --------------------------------------------------------
+        # CURRENT ASSIGNMENT VIEW
+        # --------------------------------------------------------
         assignment_view = conn.execute(
-            """SELECT p.name, d.name, c.name FROM users p
-               LEFT JOIN users d ON d.id=p.doctor_id AND d.role='doctor'
-               LEFT JOIN users c ON c.id=p.caretaker_id AND c.role='caretaker'
-               WHERE p.role='patient' ORDER BY p.name"""
+            """
+            SELECT
+                p.name,
+                d.name,
+                c.name
+            FROM users p
+            LEFT JOIN users d
+              ON d.id=p.doctor_id
+             AND LOWER(TRIM(COALESCE(d.role, '')))='doctor'
+            LEFT JOIN users c
+              ON c.id=p.caretaker_id
+             AND LOWER(TRIM(COALESCE(c.role, '')))='caretaker'
+            WHERE LOWER(TRIM(COALESCE(p.role, '')))='patient'
+            ORDER BY p.name
+            """
         ).fetchall()
+
         if assignment_view:
-            st.dataframe([{"Patient":r[0], "Doctor":('Dr. '+r[1]) if r[1] else 'Not assigned', "Caretaker/Nurse":r[2] or 'Not assigned'} for r in assignment_view], use_container_width=True, hide_index=True)
+            st.markdown("### 📋 Current Patient Assignments")
+            st.dataframe(
+                [
+                    {
+                        "Patient": r[0],
+                        "Doctor": ('Dr. ' + r[1]) if r[1] else 'Not assigned',
+                        "Caretaker/Nurse": r[2] or 'Not assigned'
+                    }
+                    for r in assignment_view
+                ],
+                use_container_width=True,
+                hide_index=True
+            )
+
+        caretaker_assignment_view = conn.execute(
+            """
+            SELECT c.name, d.name, d.qualification_status, d.account_status
+            FROM users c
+            LEFT JOIN users d
+              ON d.id=c.doctor_id_for_caretaker
+             AND LOWER(TRIM(COALESCE(d.role, '')))='doctor'
+            WHERE LOWER(TRIM(COALESCE(c.role, '')))='caretaker'
+            ORDER BY c.name
+            """
+        ).fetchall()
+
+        if caretaker_assignment_view:
+            st.markdown("### 🔗 Current Caretaker → Doctor Assignments")
+            st.dataframe(
+                [
+                    {
+                        "Caretaker / Nurse": r[0],
+                        "Doctor": ('Dr. ' + r[1]) if r[1] else 'Not assigned',
+                        "Doctor Qualification": r[2] or "N/A",
+                        "Doctor Account": r[3] or "N/A"
+                    }
+                    for r in caretaker_assignment_view
+                ],
+                use_container_width=True,
+                hide_index=True
+            )
 
 
     # ========================================================
