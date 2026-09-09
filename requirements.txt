@@ -7,4 +7,3 @@ streamlit-autorefresh>=1.0.1
 reportlab>=4.0
 Pillow>=10.0
 psycopg2-binary
-SQLAlchemy
