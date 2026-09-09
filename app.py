@@ -49,6 +49,13 @@
 # 43. 10-second image viewing countdown
 # 44. Image answers activate only after countdown reaches 0
 # 45. Image game results saved to performance history
+# 46. Schulte Table Matrix game
+# 47. Spot the Difference game
+# 48. Hidden Object Search game
+# 49. Target Tracker game
+# 50. Supabase/PostgreSQL production database with fail-closed protection
+# 51. Admin database health indicator
+# 52. Explicit opt-in SQLite only for local development
 #
 # INSTALL:
 #
@@ -68,6 +75,7 @@ import re
 import base64
 import math
 import textwrap
+import os
 import sqlite3
 import psycopg2
 from pathlib import Path
@@ -926,46 +934,55 @@ def build_patient_progress_pdf(patient_id):
 # ============================================================
 # DATABASE
 # ============================================================
-
-# ============================================================
-# DATABASE - SUPABASE POSTGRESQL WITH SAFE SQLITE FALLBACK
+# DATABASE - SUPABASE POSTGRESQL (PRODUCTION / FAIL-CLOSED)
 # ============================================================
 #
-# Streamlit Cloud can use Supabase/PostgreSQL when the connection
-# secret is configured. If the secret is missing or the database is
-# temporarily unreachable, the app falls back to a local SQLite DB
-# instead of crashing at startup.
+# IMPORTANT:
+#   Production data MUST live in Supabase/PostgreSQL.
+#   The app no longer silently switches to SQLite when PostgreSQL is
+#   unavailable. A silent fallback can make existing accounts appear to
+#   disappear after a Streamlit Cloud restart because local file storage
+#   is not a reliable production database.
 #
-# Recommended Streamlit Cloud secret:
-# [connections.postgresql]
-# url = "postgresql://postgres:YOUR_PASSWORD@...:5432/postgres?sslmode=require"
+# Streamlit Cloud secret (recommended):
+#   [connections.postgresql]
+#   url = "postgresql://..."
 #
-# Optional secrets:
-# SUPABASE_POOLER_URL = "..."
-# SUPABASE_DB_URL = "..."
-# DATABASE_URL = "..."
+# Or one of:
+#   SUPABASE_POOLER_URL
+#   SUPABASE_DB_URL
+#   DATABASE_URL
 #
-# IMPORTANT: SQLite is only a fallback on Streamlit Cloud. Its data may
-# be lost when the app/container is recreated. For permanent production
-# data, configure the Supabase Session Pooler URL in Streamlit Secrets.
+# LOCAL DEVELOPMENT ONLY:
+#   Set ALLOW_SQLITE_FALLBACK=true in Streamlit Secrets or
+#   SMRITISETU_ALLOW_SQLITE=1 in the environment if you explicitly want
+#   a local SQLite database. This is intentionally OFF by default.
 # ============================================================
 
-import psycopg2
 
-
-# Local SQLite fallback location.
+# Local SQLite remains available only when explicitly enabled for local
+# development/testing. It is never an automatic production fallback.
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_NAME = str(DATA_DIR / "mindsetu_ner.db")
 
+DB_BACKEND = "Unknown"
+DB_SOURCE = ""
+
 
 class PostgreSQLConnection:
     """Compatibility wrapper for the existing SMRITISETU SQL code."""
 
-    def __init__(self, url):
+    def __init__(self, url, source_name="PostgreSQL"):
+        self.url = url
+        self.source_name = source_name
+        self.connection = None
+        self._connect()
+
+    def _connect(self):
         self.connection = psycopg2.connect(
-            url,
+            self.url,
             connect_timeout=20,
             keepalives=1,
             keepalives_idle=30,
@@ -975,20 +992,52 @@ class PostgreSQLConnection:
         )
         self.connection.autocommit = False
 
+    def _reconnect(self):
+        try:
+            if self.connection and not self.connection.closed:
+                self.connection.close()
+        except Exception:
+            pass
+        self._connect()
+
     @staticmethod
     def _convert_placeholders(sql):
         return sql.replace("?", "%s")
 
     def execute(self, sql, params=None):
+        if self.connection is None or self.connection.closed:
+            self._reconnect()
+
         cursor = self.connection.cursor()
-        cursor.execute(self._convert_placeholders(sql), params or ())
-        return cursor
+        try:
+            cursor.execute(self._convert_placeholders(sql), params or ())
+            return cursor
+        except (psycopg2.InterfaceError, psycopg2.OperationalError):
+            # The connection may have gone stale between Streamlit reruns.
+            # Reconnect once, then retry the same read/write statement.
+            try:
+                self.connection.rollback()
+            except Exception:
+                pass
+            self._reconnect()
+            cursor = self.connection.cursor()
+            cursor.execute(self._convert_placeholders(sql), params or ())
+            return cursor
 
     def commit(self):
-        self.connection.commit()
+        try:
+            self.connection.commit()
+        except (psycopg2.InterfaceError, psycopg2.OperationalError) as exc:
+            raise RuntimeError(
+                "The Supabase/PostgreSQL connection was lost while saving data. "
+                "No automatic SQLite fallback was used. Please retry after the database connection is restored."
+            ) from exc
 
     def rollback(self):
-        self.connection.rollback()
+        try:
+            self.connection.rollback()
+        except Exception:
+            pass
 
     def close(self):
         try:
@@ -996,6 +1045,31 @@ class PostgreSQLConnection:
                 self.connection.close()
         except Exception:
             pass
+
+
+def _secret_bool(name, default=False):
+    """Read a boolean from Streamlit Secrets/environment without exposing it."""
+    raw = None
+    try:
+        raw = st.secrets.get(name)
+    except Exception:
+        raw = None
+
+    if raw is None:
+        raw = os.getenv(name)
+
+    if raw is None:
+        return default
+
+    if isinstance(raw, bool):
+        return raw
+
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+ALLOW_SQLITE_FALLBACK = _secret_bool("ALLOW_SQLITE_FALLBACK", False)
+if not ALLOW_SQLITE_FALLBACK:
+    ALLOW_SQLITE_FALLBACK = _secret_bool("SMRITISETU_ALLOW_SQLITE", False)
 
 
 def _read_database_urls():
@@ -1024,7 +1098,8 @@ def _read_database_urls():
             unique.append((name, value))
             seen.add(value)
 
-    # No secret is NOT a fatal error anymore. SQLite will be used instead.
+    # Prefer the explicitly configured Supabase Session Pooler URL because it
+    # is designed for persistent application backends and IPv4 environments.
     explicit_pooler = [item for item in unique if item[0] == "SUPABASE_POOLER_URL"]
     if explicit_pooler:
         others = [item for item in unique if item[0] != "SUPABASE_POOLER_URL"]
@@ -1045,22 +1120,18 @@ def _prepare_postgres_url(url):
 
 
 def _get_sqlite_connection():
-
+    """Create the legacy local SQLite database for explicit local development only."""
     connection = sqlite3.connect(
         DB_NAME,
         check_same_thread=False
     )
 
     connection.execute("PRAGMA foreign_keys = ON")
-    # Performance/reliability settings for SQLite under Streamlit reruns.
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA synchronous = NORMAL")
     connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA temp_store = MEMORY")
 
-    # --------------------------------------------------------
-    # KEEP ORIGINAL USERS TABLE + ADD PROVIDER ONBOARDING FIELDS
-    # --------------------------------------------------------
     connection.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1140,14 +1211,9 @@ def _get_sqlite_connection():
         )
     """)
 
-    # --------------------------------------------------------
-    # SAFE MIGRATION FOR EXISTING DATABASES
-    # --------------------------------------------------------
     existing_columns = {
         row[1]
-        for row in connection.execute(
-            "PRAGMA table_info(users)"
-        ).fetchall()
+        for row in connection.execute("PRAGMA table_info(users)").fetchall()
     }
 
     required_columns = {
@@ -1177,7 +1243,6 @@ def _get_sqlite_connection():
                 f"ALTER TABLE users ADD COLUMN {column_name} {column_definition}"
             )
 
-    # Older patient accounts should remain usable.
     connection.execute("""
         UPDATE users
         SET account_status='Active'
@@ -1196,7 +1261,6 @@ def _get_sqlite_connection():
         WHERE created_at IS NULL OR TRIM(created_at)=''
     """)
 
-    # Index columns used frequently by login, dashboards and assignments.
     connection.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_users_doctor_id ON users(doctor_id)")
@@ -1209,23 +1273,27 @@ def _get_sqlite_connection():
     connection.execute("CREATE INDEX IF NOT EXISTS idx_cert_doctor_id ON treatment_certificates(doctor_id)")
 
     connection.commit()
-
     return connection
 
 
 @st.cache_resource
 def get_connection():
-    """Return a working PostgreSQL connection, or SQLite if PostgreSQL is unavailable."""
+    """Return Supabase/PostgreSQL; only use SQLite when explicitly enabled."""
+    global DB_BACKEND, DB_SOURCE
+
     urls = _read_database_urls()
     errors = []
 
-    # 1) Prefer Supabase/PostgreSQL when configured.
+    # 1) Production path: PostgreSQL/Supabase only.
     for source_name, raw_url in urls:
         url = _prepare_postgres_url(raw_url)
         try:
-            connection = PostgreSQLConnection(url)
+            connection = PostgreSQLConnection(url, source_name=source_name)
             connection.execute("SELECT 1").fetchone()
-            return _initialize_postgres_schema(connection)
+            connection = _initialize_postgres_schema(connection)
+            DB_BACKEND = "PostgreSQL / Supabase"
+            DB_SOURCE = source_name
+            return connection
         except psycopg2.OperationalError as exc:
             message = str(exc).splitlines()[0] if str(exc) else "connection failed"
             errors.append(f"{source_name}: {message}")
@@ -1233,24 +1301,33 @@ def get_connection():
             message = str(exc).splitlines()[0] if str(exc) else "database initialization failed"
             errors.append(f"{source_name}: {message}")
 
-    # 2) Safe fallback so Streamlit Cloud does not show a RuntimeError
-    # before the login screen. This also works when no Secrets are set.
-    try:
-        return _get_sqlite_connection()
-    except Exception as sqlite_exc:
-        # Keep the public error short and do not expose credentials.
+    # 2) SQLite is now opt-in only. Never silently switch databases.
+    if ALLOW_SQLITE_FALLBACK:
+        try:
+            connection = _get_sqlite_connection()
+            DB_BACKEND = "SQLite (LOCAL DEVELOPMENT ONLY)"
+            DB_SOURCE = DB_NAME
+            return connection
+        except Exception as sqlite_exc:
+            errors.append(f"SQLite: {str(sqlite_exc).splitlines()[0] if str(sqlite_exc) else 'initialization failed'}")
+
+    if urls:
+        detail = " | ".join(errors[-3:])
         raise RuntimeError(
-            "SMRITISETU could not initialize its database. "
-            "Please check the Streamlit Cloud logs and verify that the "
-            "Supabase Session Pooler secret is configured correctly."
-        ) from sqlite_exc
+            "SMRITISETU could not connect to Supabase/PostgreSQL. "
+            "The app has stopped instead of switching to a new SQLite database, "
+            "so existing patient/doctor/caretaker data cannot silently disappear. "
+            f"Connection details: {detail}"
+        )
+
+    raise RuntimeError(
+        "No Supabase/PostgreSQL database secret is configured for SMRITISETU. "
+        "Add connections.postgresql.url or SUPABASE_POOLER_URL in Streamlit Secrets. "
+        "For local testing only, explicitly set ALLOW_SQLITE_FALLBACK=true."
+    )
 
 
 def _initialize_postgres_schema(connection):
-
-    # --------------------------------------------------------
-    # KEEP ORIGINAL USERS TABLE + ADD PROVIDER ONBOARDING FIELDS
-    # --------------------------------------------------------
     connection.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id BIGSERIAL PRIMARY KEY,
@@ -1330,9 +1407,6 @@ def _initialize_postgres_schema(connection):
         )
     """)
 
-    # --------------------------------------------------------
-    # SAFE MIGRATION FOR EXISTING DATABASES
-    # --------------------------------------------------------
     existing_columns = {
         row[0]
         for row in connection.execute(
@@ -1368,7 +1442,6 @@ def _initialize_postgres_schema(connection):
                 f"ALTER TABLE users ADD COLUMN {column_name} {column_definition}"
             )
 
-    # Older patient accounts should remain usable.
     connection.execute("""
         UPDATE users
         SET account_status='Active'
@@ -1387,7 +1460,6 @@ def _initialize_postgres_schema(connection):
         WHERE created_at IS NULL OR TRIM(created_at)=''
     """)
 
-    # Index columns used frequently by login, dashboards and assignments.
     connection.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_users_doctor_id ON users(doctor_id)")
@@ -1400,11 +1472,30 @@ def _initialize_postgres_schema(connection):
     connection.execute("CREATE INDEX IF NOT EXISTS idx_cert_doctor_id ON treatment_certificates(doctor_id)")
 
     connection.commit()
-
     return connection
 
 
-conn = get_connection()
+def database_health_check():
+    """Return (True, message) when the current database connection is healthy."""
+    try:
+        conn.execute("SELECT 1").fetchone()
+        if DB_BACKEND.startswith("PostgreSQL"):
+            return True, f"Connected to {DB_BACKEND} ({DB_SOURCE})."
+        return True, f"Connected to {DB_BACKEND}."
+    except Exception as exc:
+        return False, "Database health check failed. No database switch will be attempted."
+
+
+try:
+    conn = get_connection()
+except RuntimeError as db_exc:
+    st.error("🔴 SMRITISETU database is unavailable.")
+    st.warning(str(db_exc))
+    st.info(
+        "For Streamlit Cloud, configure the Supabase Session Pooler URL in "
+        "App Settings → Secrets, then restart the app. Existing data is not replaced by SQLite."
+    )
+    st.stop()
 
 
 # ============================================================
@@ -3800,6 +3891,12 @@ if role == "admin":
             "The administrator verifies doctors, assigns caretakers to doctors, and assigns patients to doctors and caretakers. "
             "Patients and care providers cannot change their own assignments."
         )
+
+        db_ok, db_message = database_health_check()
+        if db_ok:
+            st.success(f"🟢 Database Status: {db_message}")
+        else:
+            st.error("🔴 Database Status: Connection check failed. The app will not switch to another database.")
 
     # ========================================================
     # PATIENTS
@@ -7690,7 +7787,7 @@ elif selected_page == "games":
             if st_autorefresh is not None:
                 st_autorefresh(
                     interval=1000,
-                    limit=10,
+                    limit=None,
                     key=f"target_tracker_timer_{st.session_state.tracker_round}"
                 )
 
