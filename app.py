@@ -61,7 +61,6 @@
 # ============================================================
 
 import streamlit as st
-import sqlite3
 import random
 import hashlib
 import io
@@ -924,36 +923,74 @@ def build_patient_progress_pdf(patient_id):
 # DATABASE
 # ============================================================
 
-# Persistent database location.
-# Keeps the SQLite file in a dedicated data folder instead of relying on the
-# process working directory. This prevents accidental creation of multiple
-# database files when Streamlit is launched from different directories.
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-DB_NAME = str(DATA_DIR / "mindsetu_ner.db")
+# ============================================================
+# SUPABASE POSTGRESQL DATABASE
+# ============================================================
+# Database credentials MUST be stored in Streamlit Secrets, not in GitHub.
+# In Streamlit Cloud add:
+# [connections.postgresql]
+# url = "postgresql://postgres:YOUR_NEW_PASSWORD@db.tqyvuasildvwhtomznfd.supabase.co:5432/postgres?sslmode=require"
+
+import psycopg2
+
+
+class PostgreSQLConnection:
+    """Small compatibility wrapper so the existing SMRITISETU code can
+    continue using conn.execute(...).fetchone()/fetchall() with PostgreSQL."""
+
+    def __init__(self, url):
+        self.connection = psycopg2.connect(url, connect_timeout=15)
+        self.connection.autocommit = False
+
+    @staticmethod
+    def _convert_placeholders(sql):
+        # Existing SMRITISETU queries use SQLite's ? placeholders.
+        # psycopg2 uses %s, so convert them before execution.
+        return sql.replace("?", "%s")
+
+    def execute(self, sql, params=None):
+        cursor = self.connection.cursor()
+        cursor.execute(self._convert_placeholders(sql), params or ())
+        return cursor
+
+    def commit(self):
+        self.connection.commit()
+
+    def rollback(self):
+        self.connection.rollback()
+
+    def close(self):
+        self.connection.close()
+
 
 @st.cache_resource
 def get_connection():
+    try:
+        url = st.secrets["connections"]["postgresql"]["url"]
+    except Exception:
+        try:
+            url = st.secrets["SUPABASE_DB_URL"]
+        except Exception as exc:
+            raise RuntimeError(
+                "PostgreSQL connection secret is missing. Add "
+                "[connections.postgresql] with a url in Streamlit Cloud Secrets."
+            ) from exc
 
-    connection = sqlite3.connect(
-        DB_NAME,
-        check_same_thread=False
-    )
+    if "sslmode=" not in url:
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}sslmode=require"
 
-    connection.execute("PRAGMA foreign_keys = ON")
-    # Performance/reliability settings for SQLite under Streamlit reruns.
-    connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute("PRAGMA synchronous = NORMAL")
-    connection.execute("PRAGMA busy_timeout = 5000")
-    connection.execute("PRAGMA temp_store = MEMORY")
+    # Keep the connection object alive while we create/migrate the tables.
+    # The previous version returned here too early, which made the schema
+    # creation/migration code unreachable on a fresh PostgreSQL database.
+    connection = PostgreSQLConnection(url)
 
     # --------------------------------------------------------
     # KEEP ORIGINAL USERS TABLE + ADD PROVIDER ONBOARDING FIELDS
     # --------------------------------------------------------
     connection.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
@@ -966,7 +1003,7 @@ def get_connection():
             doctor_id_for_caretaker INTEGER,
             date_of_birth TEXT DEFAULT '',
             age INTEGER DEFAULT 0,
-            photo BLOB,
+            photo BYTEA,
             id_card_number TEXT DEFAULT '',
             id_card_created_at TEXT DEFAULT '',
             phone TEXT DEFAULT '',
@@ -984,7 +1021,7 @@ def get_connection():
 
     connection.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             game TEXT NOT NULL,
             score REAL NOT NULL,
@@ -995,7 +1032,7 @@ def get_connection():
 
     connection.execute("""
         CREATE TABLE IF NOT EXISTS reminders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             title TEXT NOT NULL,
             due_time TEXT NOT NULL,
@@ -1005,7 +1042,7 @@ def get_connection():
 
     connection.execute("""
         CREATE TABLE IF NOT EXISTS reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             patient_id INTEGER NOT NULL,
             doctor_id INTEGER NOT NULL,
             title TEXT NOT NULL,
@@ -1017,7 +1054,7 @@ def get_connection():
 
     connection.execute("""
         CREATE TABLE IF NOT EXISTS treatment_certificates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGSERIAL PRIMARY KEY,
             certificate_no TEXT UNIQUE NOT NULL,
             patient_id INTEGER NOT NULL,
             doctor_id INTEGER NOT NULL,
@@ -1034,9 +1071,10 @@ def get_connection():
     # SAFE MIGRATION FOR EXISTING DATABASES
     # --------------------------------------------------------
     existing_columns = {
-        row[1]
+        row[0]
         for row in connection.execute(
-            "PRAGMA table_info(users)"
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema='public' AND table_name='users'"
         ).fetchall()
     }
 
@@ -1046,7 +1084,7 @@ def get_connection():
         "doctor_id_for_caretaker": "INTEGER",
         "date_of_birth": "TEXT DEFAULT ''",
         "age": "INTEGER DEFAULT 0",
-        "photo": "BLOB",
+        "photo": "BYTEA",
         "id_card_number": "TEXT DEFAULT ''",
         "id_card_created_at": "TEXT DEFAULT ''",
         "phone": "TEXT DEFAULT ''",
@@ -1082,7 +1120,7 @@ def get_connection():
 
     connection.execute("""
         UPDATE users
-        SET created_at=datetime('now')
+        SET created_at=CURRENT_TIMESTAMP
         WHERE created_at IS NULL OR TRIM(created_at)=''
     """)
 
@@ -3654,87 +3692,251 @@ if role == "admin":
             m1, m2, m3, m4 = st.columns([3, 2, 2, 2])
             m1.write(f"**{u[1]}** ({u[2]})")
             m2.write(u[3].title())
-            m3.write(u[4])
+            m3.write(f"{u[4]} | Qualification: {u[5]}")
             with m4:
-                action_label = "Deactivate" if u[4] == "Active" else "Activate"
-                if st.button(
-                    action_label,
-                    key=f"status_{u[0]}",
-                    use_container_width=True
-                ):
-                    new_status = "Inactive" if u[4] == "Active" else "Active"
-                    conn.execute(
-                        "UPDATE users SET account_status=? WHERE id=? AND role IN ('doctor','caretaker')",
-                        (new_status, u[0])
-                    )
-                    conn.commit()
-                    st.rerun()
+                # A doctor must be qualification-verified before the admin can
+                # activate the account. This prevents an Active+Pending doctor
+                # from being stuck in the assignment screen.
+                if u[3] == "doctor" and u[5] != "Verified":
+                    st.caption("Awaiting verification")
+                else:
+                    action_label = "Deactivate" if u[4] == "Active" else "Activate"
+                    if st.button(
+                        action_label,
+                        key=f"status_{u[0]}",
+                        use_container_width=True
+                    ):
+                        new_status = "Inactive" if u[4] == "Active" else "Active"
+                        conn.execute(
+                            "UPDATE users SET account_status=? WHERE id=? AND role IN ('doctor','caretaker')",
+                            (new_status, u[0])
+                        )
+                        conn.commit()
+                        st.rerun()
 
         st.divider()
         st.subheader("🔗 Admin Assignment — Doctor, Caretaker & Patient")
-        st.caption("Only the administrator assigns caretakers to doctors and patients to doctors/caretakers.")
+        st.caption(
+            "Only the administrator assigns caretakers to doctors and patients to doctors/caretakers. "
+            "A doctor becomes available here after qualification verification and activation."
+        )
 
+        # Normalize status text so older PostgreSQL rows containing different
+        # capitalization/extra spaces do not disappear from the assignment list.
+        # 'Not Required' is accepted for legacy doctor accounts created before
+        # qualification verification was introduced.
         active_doctors = conn.execute(
-            "SELECT id, name FROM users WHERE role='doctor' AND account_status='Active' AND qualification_status='Verified' ORDER BY name"
+            """
+            SELECT id, name
+            FROM users
+            WHERE role='doctor'
+              AND LOWER(TRIM(COALESCE(account_status, '')))='active'
+              AND LOWER(TRIM(COALESCE(qualification_status, ''))) IN ('verified', 'not required')
+            ORDER BY name
+            """
         ).fetchall()
+
+        pending_doctors_for_assignment = conn.execute(
+            """
+            SELECT id, name, qualification_status, account_status
+            FROM users
+            WHERE role='doctor'
+              AND LOWER(TRIM(COALESCE(qualification_status, '')))='pending'
+            ORDER BY name
+            """
+        ).fetchall()
+
+        all_doctors = conn.execute(
+            """
+            SELECT id, name, qualification_status, account_status
+            FROM users
+            WHERE role='doctor'
+            ORDER BY name
+            """
+        ).fetchall()
+
         active_caretakers = conn.execute(
-            "SELECT id, name, doctor_id_for_caretaker FROM users WHERE role='caretaker' AND account_status='Active' ORDER BY name"
+            """
+            SELECT id, name, doctor_id_for_caretaker
+            FROM users
+            WHERE role='caretaker'
+              AND LOWER(TRIM(COALESCE(account_status, '')))='active'
+            ORDER BY name
+            """
         ).fetchall()
+
         all_patients = conn.execute(
             "SELECT id, name, username, doctor_id, caretaker_id FROM users WHERE role='patient' ORDER BY name"
         ).fetchall()
 
         if not active_doctors:
-            st.info("No verified active doctors are available for assignment yet.")
+            st.warning(
+                "No eligible doctors are available for assignment yet. "
+                "Verify and activate a doctor in the Verification & Management section first."
+            )
+
+            if pending_doctors_for_assignment:
+                st.info(
+                    f"{len(pending_doctors_for_assignment)} doctor(s) are waiting for qualification verification. "
+                    "You can verify them below without leaving the assignment section."
+                )
+                for d in pending_doctors_for_assignment:
+                    pc1, pc2, pc3 = st.columns([4, 2, 2])
+                    pc1.write(f"**Dr. {d[1]}** (ID {d[0]})")
+                    pc2.write(f"Qualification: {d[2]}")
+                    with pc3:
+                        if st.button(
+                            "✅ Verify & Activate",
+                            key=f"quick_verify_assignment_{d[0]}",
+                            type="primary",
+                            use_container_width=True
+                        ):
+                            card_no = f"MNE-DOC-{d[0]:05d}"
+                            conn.execute(
+                                """
+                                UPDATE users
+                                SET qualification_status='Verified',
+                                    account_status='Active',
+                                    id_card_number=?,
+                                    id_card_created_at=?
+                                WHERE id=? AND role='doctor'
+                                """,
+                                (card_no, datetime.now().isoformat(timespec="seconds"), d[0])
+                            )
+                            conn.commit()
+                            st.success(f"Dr. {d[1]} verified and activated. Assignment controls are now available.")
+                            st.rerun()
+
+            elif all_doctors:
+                st.info(
+                    "Doctors are registered, but none is currently eligible. "
+                    "Check the doctor qualification and account status in Verification & Management."
+                )
+                st.dataframe(
+                    [
+                        {
+                            "Doctor": f"Dr. {d[1]}",
+                            "ID": d[0],
+                            "Qualification": d[2] or "Not specified",
+                            "Account Status": d[3] or "Unknown",
+                            "Assignment": "Available" if d[0] in {x[0] for x in active_doctors} else "Not available",
+                        }
+                        for d in all_doctors
+                    ],
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.info("No doctors are registered yet. Register a doctor first.")
         else:
             doctor_options = {f"Dr. {d[1]} (ID {d[0]})": d[0] for d in active_doctors}
             caretaker_options = {"Not assigned": None}
             for c in active_caretakers:
                 caretaker_options[f"{c[1]} (ID {c[0]})"] = c[0]
 
-            with st.form("admin_assignment_form"):
-                assignment_patient_options = {f"{p[1]} ({p[2]}) — ID {p[0]}": p[0] for p in all_patients}
-                selected_patient_label = st.selectbox("Patient", list(assignment_patient_options.keys()) or ["No patients"], key="admin_assign_patient")
-                selected_doctor_label = st.selectbox("Assign Doctor", list(doctor_options.keys()), key="admin_assign_doctor")
-                selected_caretaker_label = st.selectbox("Assign Caretaker / Nurse", list(caretaker_options.keys()), key="admin_assign_caretaker")
-                submitted_assignment = st.form_submit_button("💾 Save Patient Assignment", type="primary", use_container_width=True)
+            if not all_patients:
+                st.info("No patients are registered yet. Register a patient first.")
+            else:
+                assignment_patient_options = {
+                    f"{p[1]} ({p[2]}) — ID {p[0]}": p[0]
+                    for p in all_patients
+                }
 
-            if submitted_assignment and all_patients:
-                pid = assignment_patient_options[selected_patient_label]
-                did = doctor_options[selected_doctor_label]
-                cid = caretaker_options[selected_caretaker_label]
-                if cid is not None:
-                    caretaker_doctor = conn.execute("SELECT doctor_id_for_caretaker FROM users WHERE id=? AND role='caretaker'", (cid,)).fetchone()
-                    if not caretaker_doctor or caretaker_doctor[0] != did:
-                        st.error("This caretaker/nurse is not assigned to the selected doctor. Assign the caretaker to that doctor first.")
+                with st.form("admin_assignment_form"):
+                    selected_patient_label = st.selectbox(
+                        "Patient",
+                        list(assignment_patient_options.keys()),
+                        key="admin_assign_patient"
+                    )
+                    selected_doctor_label = st.selectbox(
+                        "Assign Doctor",
+                        list(doctor_options.keys()),
+                        key="admin_assign_doctor"
+                    )
+                    selected_caretaker_label = st.selectbox(
+                        "Assign Caretaker / Nurse",
+                        list(caretaker_options.keys()),
+                        key="admin_assign_caretaker"
+                    )
+                    submitted_assignment = st.form_submit_button(
+                        "💾 Save Patient Assignment",
+                        type="primary",
+                        use_container_width=True
+                    )
+
+                if submitted_assignment:
+                    pid = assignment_patient_options[selected_patient_label]
+                    did = doctor_options[selected_doctor_label]
+                    cid = caretaker_options[selected_caretaker_label]
+
+                    if cid is not None:
+                        caretaker_doctor = conn.execute(
+                            "SELECT doctor_id_for_caretaker FROM users WHERE id=? AND role='caretaker'",
+                            (cid,)
+                        ).fetchone()
+                        if not caretaker_doctor or caretaker_doctor[0] != did:
+                            st.error(
+                                "This caretaker/nurse is not assigned to the selected doctor. "
+                                "Assign the caretaker to that doctor first."
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE users SET doctor_id=?, caretaker_id=? WHERE id=? AND role='patient'",
+                                (did, cid, pid)
+                            )
+                            conn.commit()
+                            st.success("Patient assigned successfully to the selected doctor and caretaker.")
+                            st.rerun()
                     else:
-                        conn.execute("UPDATE users SET doctor_id=?, caretaker_id=? WHERE id=? AND role='patient'", (did, cid, pid))
+                        conn.execute(
+                            "UPDATE users SET doctor_id=?, caretaker_id=NULL WHERE id=? AND role='patient'",
+                            (did, pid)
+                        )
                         conn.commit()
-                        st.success("Patient assigned successfully to the selected doctor and caretaker.")
+                        st.success("Patient assigned successfully to the selected doctor.")
                         st.rerun()
-                else:
-                    conn.execute("UPDATE users SET doctor_id=?, caretaker_id=NULL WHERE id=? AND role='patient'", (did, pid))
-                    conn.commit()
-                    st.success("Patient assigned successfully to the selected doctor.")
-                    st.rerun()
 
         st.divider()
         st.subheader("🤝 Assign Caretaker / Nurse to Doctor")
         unassigned_caretakers = conn.execute(
-            "SELECT id, name FROM users WHERE role='caretaker' AND account_status='Active' ORDER BY name"
+            """
+            SELECT id, name
+            FROM users
+            WHERE role='caretaker'
+              AND LOWER(TRIM(COALESCE(account_status, '')))='active'
+            ORDER BY name
+            """
         ).fetchall()
+
         if unassigned_caretakers and active_doctors:
             ct_opts = {f"{c[1]} (ID {c[0]})": c[0] for c in unassigned_caretakers}
             doc_opts = {f"Dr. {d[1]} (ID {d[0]})": d[0] for d in active_doctors}
             with st.form("admin_caretaker_doctor_form"):
-                ct_label = st.selectbox("Caretaker / Nurse", list(ct_opts.keys()), key="admin_ct_doctor_ct")
-                dr_label = st.selectbox("Doctor", list(doc_opts.keys()), key="admin_ct_doctor_dr")
-                save_ct = st.form_submit_button("🔗 Assign Caretaker to Doctor", type="primary", use_container_width=True)
+                ct_label = st.selectbox(
+                    "Caretaker / Nurse",
+                    list(ct_opts.keys()),
+                    key="admin_ct_doctor_ct"
+                )
+                dr_label = st.selectbox(
+                    "Doctor",
+                    list(doc_opts.keys()),
+                    key="admin_ct_doctor_dr"
+                )
+                save_ct = st.form_submit_button(
+                    "🔗 Assign Caretaker to Doctor",
+                    type="primary",
+                    use_container_width=True
+                )
             if save_ct:
-                conn.execute("UPDATE users SET doctor_id_for_caretaker=? WHERE id=? AND role='caretaker'", (doc_opts[dr_label], ct_opts[ct_label]))
+                conn.execute(
+                    "UPDATE users SET doctor_id_for_caretaker=? WHERE id=? AND role='caretaker'",
+                    (doc_opts[dr_label], ct_opts[ct_label])
+                )
                 conn.commit()
                 st.success("Caretaker / nurse assigned to doctor successfully.")
                 st.rerun()
+        elif active_doctors and not unassigned_caretakers:
+            st.info("No active caretaker/nurse accounts are available to assign. Register a caretaker first.")
 
         assignment_view = conn.execute(
             """SELECT p.name, d.name, c.name FROM users p
