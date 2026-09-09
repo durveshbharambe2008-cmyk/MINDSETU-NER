@@ -933,7 +933,7 @@ DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_NAME = str(DATA_DIR / "mindsetu_ner.db")
 
-
+@st.cache_resource
 def get_connection():
 
     connection = sqlite3.connect(
