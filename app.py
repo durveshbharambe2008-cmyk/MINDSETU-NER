@@ -92,6 +92,7 @@ try:
         TableStyle,
         PageBreak,
         KeepTogether,
+        Image,
     )
     REPORTLAB_AVAILABLE = True
 except ImportError:
@@ -1447,6 +1448,7 @@ def calculate_age_from_dob(dob_value):
 
 
 def make_id_card_pdf(person_id, role_name):
+    """Generate a compact single-page ID card with the uploaded profile photo."""
     row = conn.execute(
         """SELECT id, name, username, role, qualification, qualification_number,
                   phone, email, location, age, photo, id_card_number
@@ -1455,23 +1457,79 @@ def make_id_card_pdf(person_id, role_name):
     ).fetchone()
     if not row:
         return None
+
     card_no = row[11] or f"MNE-{role_name[:3].upper()}-{row[0]:05d}"
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=(90*mm, 55*mm),
-                            rightMargin=5*mm, leftMargin=5*mm,
-                            topMargin=5*mm, bottomMargin=5*mm)
+
+    # ID-card size: 90 x 55 mm, kept to one PDF page.
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=(90 * mm, 55 * mm),
+        rightMargin=4 * mm,
+        leftMargin=4 * mm,
+        topMargin=4 * mm,
+        bottomMargin=4 * mm,
+    )
+
     styles = getSampleStyleSheet()
-    story = [Paragraph("<b>SMRITISETU</b>", styles["Title"]),
-             Paragraph(f"<b>{role_name.title()} Identity Card</b>", styles["Heading3"])]
-    photo_text = "Photo: Uploaded" if row[10] else "Photo: Not uploaded"
-    story += [Paragraph(f"<b>Name:</b> {safe_pdf_text(row[1])}", styles["BodyText"]),
-              Paragraph(f"<b>ID:</b> {safe_pdf_text(card_no)}", styles["BodyText"]),
-              Paragraph(f"<b>Age:</b> {row[9] or 'N/A'}", styles["BodyText"]),
-              Paragraph(f"<b>Qualification:</b> {safe_pdf_text(row[4] or 'N/A')}", styles["BodyText"]),
-              Paragraph(f"<b>Registration No:</b> {safe_pdf_text(row[5] or 'N/A')}", styles["BodyText"]),
-              Paragraph(f"<b>Phone:</b> {safe_pdf_text(row[6] or 'N/A')}", styles["BodyText"]),
-              Paragraph(photo_text, styles["BodyText"])]
-    doc.build(story)
+    title = ParagraphStyle(
+        "IDCardTitle", parent=styles["Title"], fontSize=13, leading=14,
+        alignment=TA_CENTER, spaceAfter=1 * mm
+    )
+    subtitle = ParagraphStyle(
+        "IDCardSubtitle", parent=styles["Heading3"], fontSize=8.5, leading=10,
+        alignment=TA_CENTER, spaceAfter=2 * mm
+    )
+    detail = ParagraphStyle(
+        "IDCardDetail", parent=styles["BodyText"], fontSize=6.8, leading=8.1,
+        spaceAfter=0.5 * mm
+    )
+
+    # Build the uploaded photo as a ReportLab Image.  Photos are stored as
+    # bytes in the users.photo field, so this works for both SQLite and Postgres.
+    photo_flowable = None
+    if row[10]:
+        try:
+            photo_bytes = bytes(row[10]) if not isinstance(row[10], bytes) else row[10]
+            photo_stream = io.BytesIO(photo_bytes)
+            photo_flowable = Image(photo_stream, width=25 * mm, height=30 * mm)
+            photo_flowable.hAlign = "CENTER"
+        except Exception:
+            photo_flowable = None
+
+    if photo_flowable is None:
+        photo_flowable = Paragraph("<b>PHOTO</b><br/>Not uploaded", detail)
+
+    details = [
+        Paragraph("<b>SMRITISETU</b>", title),
+        Paragraph(f"<b>{safe_pdf_text(role_name.title())} Identity Card</b>", subtitle),
+        Paragraph(f"<b>Name:</b> {safe_pdf_text(row[1])}", detail),
+        Paragraph(f"<b>ID:</b> {safe_pdf_text(card_no)}", detail),
+        Paragraph(f"<b>Age:</b> {row[9] or 'N/A'}", detail),
+        Paragraph(f"<b>Qualification:</b> {safe_pdf_text(row[4] or 'N/A')}", detail),
+        Paragraph(f"<b>Registration No:</b> {safe_pdf_text(row[5] or 'N/A')}", detail),
+        Paragraph(f"<b>Phone:</b> {safe_pdf_text(row[6] or 'N/A')}", detail),
+    ]
+
+    # Keep all content inside one bordered card and place the uploaded photo
+    # on the right side.  This also prevents the previous two-page output.
+    card_table = Table(
+        [[details, photo_flowable]],
+        colWidths=[55 * mm, 27 * mm],
+        rowHeights=[46 * mm],
+        hAlign="CENTER",
+    )
+    card_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2 * mm),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2 * mm),
+        ("TOPPADDING", (0, 0), (-1, -1), 2 * mm),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2 * mm),
+        ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#1F4E79")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D9E2F3")),
+    ]))
+
+    doc.build([card_table])
     return buf.getvalue()
 
 
