@@ -84,6 +84,8 @@ try:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import mm
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.utils import ImageReader
     from reportlab.platypus import (
         SimpleDocTemplate,
         Paragraph,
@@ -1447,6 +1449,7 @@ def calculate_age_from_dob(dob_value):
 
 
 def make_id_card_pdf(person_id, role_name):
+    """Create a compact one-page SMRITISETU ID card with the uploaded photo embedded."""
     row = conn.execute(
         """SELECT id, name, username, role, qualification, qualification_number,
                   phone, email, location, age, photo, id_card_number
@@ -1455,23 +1458,130 @@ def make_id_card_pdf(person_id, role_name):
     ).fetchone()
     if not row:
         return None
+
     card_no = row[11] or f"MNE-{role_name[:3].upper()}-{row[0]:05d}"
+
+    # ID-card size: 90 mm x 55 mm, kept to a single PDF page.
+    card_w = 90 * mm
+    card_h = 55 * mm
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=(90*mm, 55*mm),
-                            rightMargin=5*mm, leftMargin=5*mm,
-                            topMargin=5*mm, bottomMargin=5*mm)
-    styles = getSampleStyleSheet()
-    story = [Paragraph("<b>SMRITISETU</b>", styles["Title"]),
-             Paragraph(f"<b>{role_name.title()} Identity Card</b>", styles["Heading3"])]
-    photo_text = "Photo: Uploaded" if row[10] else "Photo: Not uploaded"
-    story += [Paragraph(f"<b>Name:</b> {safe_pdf_text(row[1])}", styles["BodyText"]),
-              Paragraph(f"<b>ID:</b> {safe_pdf_text(card_no)}", styles["BodyText"]),
-              Paragraph(f"<b>Age:</b> {row[9] or 'N/A'}", styles["BodyText"]),
-              Paragraph(f"<b>Qualification:</b> {safe_pdf_text(row[4] or 'N/A')}", styles["BodyText"]),
-              Paragraph(f"<b>Registration No:</b> {safe_pdf_text(row[5] or 'N/A')}", styles["BodyText"]),
-              Paragraph(f"<b>Phone:</b> {safe_pdf_text(row[6] or 'N/A')}", styles["BodyText"]),
-              Paragraph(photo_text, styles["BodyText"])]
-    doc.build(story)
+    c = canvas.Canvas(buf, pagesize=(card_w, card_h))
+
+    # Card background and border.
+    c.setFillColor(colors.white)
+    c.roundRect(2*mm, 2*mm, card_w-4*mm, card_h-4*mm, 3*mm, fill=1, stroke=0)
+    c.setStrokeColor(colors.HexColor("#1F4E79"))
+    c.setLineWidth(1.2)
+    c.roundRect(2*mm, 2*mm, card_w-4*mm, card_h-4*mm, 3*mm, fill=0, stroke=1)
+
+    # Header.
+    c.setFillColor(colors.HexColor("#1F4E79"))
+    c.roundRect(2*mm, card_h-14*mm, card_w-4*mm, 12*mm, 3*mm, fill=1, stroke=0)
+    c.setFillColor(colors.white)
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(7*mm, card_h-8*mm, "SMRITISETU")
+    c.setFont("Helvetica-Bold", 7.5)
+    c.drawRightString(card_w-7*mm, card_h-8*mm, f"{role_name.title()} ID CARD")
+
+    # Photo area on the right.
+    photo_x = card_w - 34*mm
+    photo_y = 13*mm
+    photo_w = 25*mm
+    photo_h = 30*mm
+    c.setStrokeColor(colors.HexColor("#1F4E79"))
+    c.setLineWidth(0.8)
+    c.rect(photo_x, photo_y, photo_w, photo_h, fill=0, stroke=1)
+
+    photo_bytes = row[10]
+    if photo_bytes:
+        try:
+            if isinstance(photo_bytes, memoryview):
+                photo_bytes = photo_bytes.tobytes()
+            elif isinstance(photo_bytes, bytearray):
+                photo_bytes = bytes(photo_bytes)
+            elif isinstance(photo_bytes, str):
+                # Backward compatibility if an older record contains base64 text.
+                try:
+                    photo_bytes = base64.b64decode(photo_bytes)
+                except Exception:
+                    photo_bytes = None
+
+            if photo_bytes:
+                # Crop/resize to the ID-card photo frame while preserving aspect ratio.
+                img = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
+                target_ratio = photo_w / photo_h
+                img_ratio = img.width / img.height
+                if img_ratio > target_ratio:
+                    new_w = int(img.height * target_ratio)
+                    left = max(0, (img.width - new_w) // 2)
+                    img = img.crop((left, 0, left + new_w, img.height))
+                else:
+                    new_h = int(img.width / target_ratio)
+                    top = max(0, (img.height - new_h) // 2)
+                    img = img.crop((0, top, img.width, top + new_h))
+                img = img.resize((500, 600), Image.LANCZOS)
+                photo_buf = io.BytesIO()
+                img.save(photo_buf, format="JPEG", quality=92)
+                photo_buf.seek(0)
+                c.drawImage(
+                    ImageReader(photo_buf),
+                    photo_x, photo_y,
+                    width=photo_w,
+                    height=photo_h,
+                    preserveAspectRatio=False,
+                    mask="auto"
+                )
+        except Exception:
+            # Keep a clean placeholder if an old/corrupt photo cannot be decoded.
+            pass
+
+    # Photo placeholder only when the image could not be rendered.
+    if not photo_bytes:
+        c.setFillColor(colors.HexColor("#F2F4F7"))
+        c.rect(photo_x+0.5*mm, photo_y+0.5*mm, photo_w-mm, photo_h-mm, fill=1, stroke=0)
+        c.setFillColor(colors.HexColor("#666666"))
+        c.setFont("Helvetica", 6.5)
+        c.drawCentredString(photo_x + photo_w/2, photo_y + photo_h/2 + 2*mm, "PHOTO")
+        c.drawCentredString(photo_x + photo_w/2, photo_y + photo_h/2 - 2*mm, "NOT UPLOADED")
+
+    # Details on the left.
+    left_x = 7*mm
+    value_x = 29*mm
+    detail_y = card_h - 19*mm
+    line_gap = 5.1*mm
+
+    details = [
+        ("Name", safe_pdf_text(row[1] or "N/A")),
+        ("ID", safe_pdf_text(card_no)),
+        ("Age", str(row[9] or "N/A")),
+        ("Qualification", safe_pdf_text(row[4] or "N/A")),
+        ("Reg. No.", safe_pdf_text(row[5] or "N/A")),
+        ("Phone", safe_pdf_text(row[6] or "N/A")),
+    ]
+
+    c.setFillColor(colors.HexColor("#222222"))
+    for label, value in details:
+        c.setFont("Helvetica-Bold", 6.8)
+        c.drawString(left_x, detail_y, f"{label}:")
+        c.setFont("Helvetica", 6.8)
+        # Keep long values inside the left-side area before the photo.
+        max_chars = 29 if label not in ("Qualification",) else 24
+        if len(value) > max_chars:
+            value = value[:max_chars-3] + "..."
+        c.drawString(value_x, detail_y, value)
+        detail_y -= line_gap
+
+    # Footer.
+    c.setStrokeColor(colors.HexColor("#D0D7DE"))
+    c.setLineWidth(0.5)
+    c.line(7*mm, 8.5*mm, card_w-7*mm, 8.5*mm)
+    c.setFillColor(colors.HexColor("#555555"))
+    c.setFont("Helvetica", 5.8)
+    c.drawString(7*mm, 5.2*mm, "Authorized SMRITISETU Identity Card")
+    c.drawRightString(card_w-7*mm, 5.2*mm, "smritisetu")
+
+    c.showPage()
+    c.save()
     return buf.getvalue()
 
 
