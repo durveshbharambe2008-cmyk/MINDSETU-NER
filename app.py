@@ -68,6 +68,7 @@ import re
 import base64
 import math
 import textwrap
+import sqlite3
 import psycopg2
 from pathlib import Path
 from PIL import Image
