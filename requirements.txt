@@ -7,3 +7,4 @@ streamlit-autorefresh>=1.0.1
 reportlab>=4.0
 Pillow>=10.0
 psycopg2-binary
+googletrans==4.0.0-rc1
