@@ -1745,36 +1745,19 @@ def queue_voice(
 
 
 def play_pending_voice():
-
-    message = st.session_state.get(
-        "pending_voice_message"
-    )
-
-    language = st.session_state.get(
-        "pending_voice_language",
-        "English"
-    )
+    message = st.session_state.get("pending_voice_message")
+    language = st.session_state.get("pending_voice_language", "English")
 
     if not message:
         return
 
-    # Clear first so the same message isn't played
-    # on every rerun.
     st.session_state.pending_voice_message = None
     st.session_state.pending_voice_language = None
 
-    html = generate_voice_html(
-        message,
-        language
-    )
+    html = generate_voice_html(message, language)
 
     if html:
-
-        st.html(
-            html,
-            width=1,
-            unsafe_allow_javascript=True
-        )
+        st.markdown(html, unsafe_allow_html=True)
 
 
 def announce(
@@ -2541,7 +2524,9 @@ if not st.session_state.logged_in:
                 if existing:
                     st.error("Username already exists.")
                 else:
-
+                    # Store file bytes for document download/verification
+                    doc_document_bytes = doc_document.getvalue() if doc_document else None
+                    
                     conn.execute(
                         """
                         INSERT INTO users(
