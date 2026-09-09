@@ -52,7 +52,7 @@
 #
 # INSTALL:
 #
-# pip install streamlit gTTS SpeechRecognition streamlit-mic-recorder reportlab pandas streamlit-autorefresh
+# pip install streamlit gTTS SpeechRecognition streamlit-mic-recorder reportlab pandas streamlit-autorefresh psycopg2-binary
 #
 # RUN:
 #
@@ -935,11 +935,23 @@ import psycopg2
 
 
 class PostgreSQLConnection:
-    """Small compatibility wrapper so the existing SMRITISETU code can
-    continue using conn.execute(...).fetchone()/fetchall() with PostgreSQL."""
+    """Small compatibility wrapper for the existing SMRITISETU SQL code.
+
+    The application was originally written with SQLite-style '?' placeholders.
+    PostgreSQL/psycopg2 uses '%s', so the wrapper converts those placeholders
+    while keeping the rest of the application unchanged.
+    """
 
     def __init__(self, url):
-        self.connection = psycopg2.connect(url, connect_timeout=15)
+        self.connection = psycopg2.connect(
+            url,
+            connect_timeout=20,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+            application_name="SMRITISETU",
+        )
         self.connection.autocommit = False
 
     @staticmethod
@@ -960,30 +972,125 @@ class PostgreSQLConnection:
         self.connection.rollback()
 
     def close(self):
-        self.connection.close()
+        try:
+            if self.connection and not self.connection.closed:
+                self.connection.close()
+        except Exception:
+            pass
+
+
+def _read_database_urls():
+    """Read database URLs from Streamlit Secrets without exposing them.
+
+    Recommended:
+        [connections.postgresql]
+        url = "SUPABASE SESSION POOLER URI"
+
+    Optional fallback:
+        SUPABASE_POOLER_URL = "SUPABASE SESSION POOLER URI"
+        SUPABASE_DB_URL = "SUPABASE DATABASE URI"
+        DATABASE_URL = "POSTGRESQL URI"
+
+    The pooler URL is preferred because Streamlit Community Cloud may run
+    from an IPv4-only network while Supabase direct database connections can
+    prefer IPv6.
+    """
+    urls = []
+
+    # 1) Recommended Streamlit connection secret.
+    try:
+        value = st.secrets["connections"]["postgresql"]["url"]
+        if value:
+            urls.append(("connections.postgresql.url", str(value).strip()))
+    except Exception:
+        pass
+
+    # 2) Recommended explicit pooler fallback.
+    for key in ("SUPABASE_POOLER_URL", "SUPABASE_DB_URL", "DATABASE_URL"):
+        try:
+            value = st.secrets[key]
+            if value:
+                urls.append((key, str(value).strip()))
+        except Exception:
+            pass
+
+    # Remove duplicate URLs while preserving priority order.
+    unique = []
+    seen = set()
+    for name, value in urls:
+        if value and value not in seen:
+            unique.append((name, value))
+            seen.add(value)
+
+    if not unique:
+        raise RuntimeError(
+            "PostgreSQL connection secret is missing. In Streamlit Cloud, "
+            "add [connections.postgresql] with a Supabase Session Pooler URL "
+            "under Settings → Secrets."
+        )
+
+    # If an explicit SUPABASE_POOLER_URL exists, prefer it over a direct URL.
+    explicit_pooler = [
+        item for item in unique if item[0] == "SUPABASE_POOLER_URL"
+    ]
+    if explicit_pooler:
+        others = [item for item in unique if item[0] != "SUPABASE_POOLER_URL"]
+        unique = explicit_pooler + others
+
+    return unique
+
+
+def _prepare_postgres_url(url):
+    """Ensure SSL is enabled without printing or modifying credentials."""
+    url = str(url).strip()
+    if not url:
+        return url
+
+    lower_url = url.lower()
+    if "sslmode=" not in lower_url:
+        separator = "&" if "?" in url else "?"
+        url = f"{url}{separator}sslmode=require"
+    return url
 
 
 @st.cache_resource
 def get_connection():
-    try:
-        url = st.secrets["connections"]["postgresql"]["url"]
-    except Exception:
+    urls = _read_database_urls()
+    errors = []
+
+    for source_name, raw_url in urls:
+        url = _prepare_postgres_url(raw_url)
+
         try:
-            url = st.secrets["SUPABASE_DB_URL"]
-        except Exception as exc:
-            raise RuntimeError(
-                "PostgreSQL connection secret is missing. Add "
-                "[connections.postgresql] with a url in Streamlit Cloud Secrets."
-            ) from exc
+            connection = PostgreSQLConnection(url)
 
-    if "sslmode=" not in url:
-        separator = "&" if "?" in url else "?"
-        url = f"{url}{separator}sslmode=require"
+            # Verify that the connection is actually usable before returning it.
+            connection.execute("SELECT 1").fetchone()
 
-    # Keep the connection object alive while we create/migrate the tables.
-    # The previous version returned here too early, which made the schema
-    # creation/migration code unreachable on a fresh PostgreSQL database.
-    connection = PostgreSQLConnection(url)
+            # Keep the connection object alive while we create/migrate tables.
+            # The schema migration below must remain reachable on a fresh DB.
+            return _initialize_postgres_schema(connection)
+
+        except psycopg2.OperationalError as exc:
+            # Never display the URL/password. Store only a safe summary.
+            message = str(exc).splitlines()[0] if str(exc) else "connection failed"
+            errors.append(f"{source_name}: {message}")
+
+        except Exception:
+            # Do not expose database credentials or full internal tracebacks.
+            errors.append(f"{source_name}: database initialization failed")
+
+    # This error is intentionally actionable but contains no secrets.
+    raise RuntimeError(
+        "SMRITISETU could not connect to PostgreSQL. "
+        "For Supabase on Streamlit Cloud, use the Session Pooler connection "
+        "(port 5432) in Streamlit Secrets. Also verify that the database "
+        "password is current. The database URL/password is not printed here "
+        "for security."
+    )
+
+
+def _initialize_postgres_schema(connection):
 
     # --------------------------------------------------------
     # KEEP ORIGINAL USERS TABLE + ADD PROVIDER ONBOARDING FIELDS
