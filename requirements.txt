@@ -6,3 +6,4 @@ streamlit-mic-recorder>=0.0.8
 streamlit-autorefresh>=1.0.1
 reportlab>=4.0
 Pillow>=10.0
+postgresql://postgres:visionaries404gods@db.tqyvuasildvwhtomznfd.supabase.co:5432/postgres
