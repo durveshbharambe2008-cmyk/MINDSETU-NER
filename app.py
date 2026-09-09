@@ -165,6 +165,22 @@ def load_app_logo():
 APP_LOGO = load_app_logo()
 
 
+def normalize_image_for_streamlit(image_data):
+    """Return a Streamlit-safe image value for DB/file image data.
+
+    PostgreSQL BYTEA values can be returned by psycopg2 as ``memoryview``
+    objects. ``st.image`` does not reliably accept that type, so convert it
+    (and bytearray) to plain bytes before rendering.
+    """
+    if image_data is None:
+        return None
+    if isinstance(image_data, memoryview):
+        return image_data.tobytes()
+    if isinstance(image_data, bytearray):
+        return bytes(image_data)
+    return image_data
+
+
 # ============================================================
 # PAGE CONFIG
 # ============================================================
@@ -4091,7 +4107,7 @@ if role == "admin":
                     st.write(f"**Uploaded Document:** {d[8]}")
                     st.write(f"**Age:** {d[11] or 'N/A'}")
                     if d[12]:
-                        st.image(d[12], caption="Doctor Photo", width=140)
+                        st.image(normalize_image_for_streamlit(d[12]), caption="Doctor Photo", width=140)
                     st.write(f"**Submitted:** {d[13]}")
 
                     verify_col, reject_col = st.columns(2)
@@ -5037,7 +5053,7 @@ if role == "doctor":
             st.write(f"**Account Status:** {doctor_profile[6]}")
             st.write(f"**Age:** {doctor_profile[7] or 'N/A'}")
             if doctor_profile[8]:
-                st.image(doctor_profile[8], caption="Doctor Photo", width=160)
+                st.image(normalize_image_for_streamlit(doctor_profile[8]), caption="Doctor Photo", width=160)
             if doctor_profile[6] == "Active" and doctor_profile[5] == "Verified":
                 if not doctor_profile[9]:
                     card_no = f"MNE-DOC-{user_id:05d}"
@@ -5304,7 +5320,7 @@ if role == "caretaker":
         st.write(f"**Account Status:** {caretaker_profile[4] if caretaker_profile else ''}")
         st.write(f"**Assigned Doctor:** {('Dr. ' + conn.execute("SELECT name FROM users WHERE id=? AND role='doctor'", (caretaker_profile[6],)).fetchone()[0]) if caretaker_profile and caretaker_profile[6] and conn.execute("SELECT name FROM users WHERE id=? AND role='doctor'", (caretaker_profile[6],)).fetchone() else 'Not assigned'}")
         if caretaker_profile and caretaker_profile[5]:
-            st.image(caretaker_profile[5], caption="Caretaker / Nurse Photo", width=160)
+            st.image(normalize_image_for_streamlit(caretaker_profile[5]), caption="Caretaker / Nurse Photo", width=160)
         if caretaker_profile and caretaker_profile[4] == "Active":
             if not caretaker_profile[7]:
                 card_no=f"MNE-CARE-{user_id:05d}"
@@ -5395,7 +5411,7 @@ with st.expander("👤 My Profile & Care Team", expanded=False):
     c1, c2 = st.columns([1, 3])
     with c1:
         if patient_photo:
-            st.image(patient_photo, caption="Patient Photo", width=150)
+            st.image(normalize_image_for_streamlit(patient_photo), caption="Patient Photo", width=150)
         else:
             st.info("No patient photo uploaded.")
     with c2:
