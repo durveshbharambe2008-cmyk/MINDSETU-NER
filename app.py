@@ -8,7 +8,7 @@
 # 2. Patient registration and login
 # 3. Admin dashboard
 # 4. Admin can add doctors
-# 5. Admin can assign patients to doctors
+# 5. Provider-driven patient relationships
 # 6. Doctor can see assigned patients only
 # 7. Doctor cannot access games
 # 8. Patient cognitive games
@@ -37,9 +37,9 @@
 # 31. Doctor Registration + Qualification Verification
 # 32. Caretaker Registration
 # 33. Phone / Email / Location for providers and patients
-# 34. Admin-driven doctor/caretaker/patient assignment
-# 35. Caretaker -> doctor assignment
-# 36. Patient -> doctor/caretaker assignment
+# 34. Provider-driven doctor/caretaker/patient registration
+# 35. Doctor -> caretaker/patient registration
+# 36. Caretaker -> patient registration
 # 37. Provider-owned patient privacy
 # 38. 10-second Memory Sequence viewing period
 # 39. Memory sequence hides automatically before answer entry
@@ -3712,7 +3712,7 @@ if not st.session_state.logged_in:
 
         st.subheader("🤝 Caretaker Registration")
         st.info(
-            "Caretakers register here. The administrator verifies/activates the account and assigns the caretaker to a doctor and patients."
+            "Caretakers register here. You can register freely. A doctor can later create a caretaker/nurse relationship from the doctor portal."
         )
 
         care_name = st.text_input("Full Name", key="caretaker_reg_name")
@@ -3803,7 +3803,7 @@ if not st.session_state.logged_in:
                         "Caretaker account created successfully."
                     )
                     announce(
-                        "Caretaker account created successfully. The administrator will assign you to a doctor and patients.",
+                        "Caretaker account created successfully. You can use your caretaker portal to register patients. A doctor relationship can be created by the doctor who registers you.",
                         care_language
                     )
 
@@ -4199,337 +4199,18 @@ if role == "admin":
                         st.rerun()
 
         st.divider()
-        st.subheader("🔗 Admin Assignment — Doctor, Caretaker & Patient")
+        st.subheader("🔗 Provider Relationships — View Only")
         st.caption(
-            "Only the administrator controls assignments. Caretakers can be linked to a registered doctor, "
-            "while patient-to-doctor assignment is enabled only for active doctors."
+            "The administrator does not assign doctors, caretakers/nurses, or patients. "
+            "Doctors register their own patients and caretakers/nurses, and caretakers register their own patients. "
+            "Use this section only to review the relationships created by those registration flows."
         )
 
-        # --------------------------------------------------------
-        # LOAD ALL PROVIDERS FIRST
-        # --------------------------------------------------------
-        # IMPORTANT FIX:
-        # The old code placed BOTH assignment controls inside
-        # `if active_doctors:`. When a doctor was registered but still
-        # pending verification, the caretaker-to-doctor controls vanished
-        # completely. The caretaker assignment is now independent of the
-        # patient assignment and is rendered whenever a doctor is registered.
-        all_doctors = conn.execute(
-            """
-            SELECT id, name, qualification_status, account_status, doctor_id_for_caretaker
-            FROM users
-            WHERE LOWER(TRIM(COALESCE(role, '')))='doctor'
-            ORDER BY name
-            """
-        ).fetchall()
-
-        active_doctors = [
-            d for d in all_doctors
-            if str(d[3] or '').strip().lower() == 'active'
-            and str(d[2] or '').strip().lower() in ('verified', 'not required')
-        ]
-
-        pending_doctors_for_assignment = [
-            d for d in all_doctors
-            if str(d[2] or '').strip().lower() == 'pending'
-        ]
-
-        # For caretaker -> doctor linking, a registered doctor is selectable
-        # unless the doctor has explicitly been rejected. This allows the
-        # administrator to prepare the relationship before activation and,
-        # most importantly, prevents the assignment controls from disappearing.
-        caretaker_doctors = [
-            d for d in all_doctors
-            if str(d[2] or '').strip().lower() != 'rejected'
-            and str(d[3] or '').strip().lower() != 'rejected'
-        ]
-
-        active_caretakers = conn.execute(
-            """
-            SELECT id, name, doctor_id_for_caretaker
-            FROM users
-            WHERE LOWER(TRIM(COALESCE(role, '')))='caretaker'
-              AND LOWER(TRIM(COALESCE(account_status, '')))='active'
-            ORDER BY name
-            """
-        ).fetchall()
-
-        all_patients = conn.execute(
-            """
-            SELECT id, name, username, doctor_id, caretaker_id
-            FROM users
-            WHERE LOWER(TRIM(COALESCE(role, '')))='patient'
-            ORDER BY name
-            """
-        ).fetchall()
-
-        # --------------------------------------------------------
-        # PATIENT -> DOCTOR / CARETAKER ASSIGNMENT
-        # --------------------------------------------------------
-        st.markdown("### 👥 Patient Assignment")
-        st.caption(
-            "Doctor and caretaker selectors are always shown when provider records exist. "
-            "A doctor must be verified and active before a patient can be assigned to that doctor."
-        )
-
-        # Always build the caretaker list independently. Do NOT hide the
-        # caretaker selector just because there is currently no active doctor.
-        all_caretakers = conn.execute(
-            """
-            SELECT id, name, account_status, doctor_id_for_caretaker
-            FROM users
-            WHERE LOWER(TRIM(COALESCE(role, '')))='caretaker'
-              AND LOWER(TRIM(COALESCE(account_status, ''))) <> 'rejected'
-            ORDER BY name
-            """
-        ).fetchall()
-
-        non_rejected_doctors = [
-            d for d in all_doctors
-            if str(d[2] or '').strip().lower() != 'rejected'
-            and str(d[3] or '').strip().lower() != 'rejected'
-        ]
-
-        if not all_doctors:
-            st.warning(
-                "No doctor account is currently stored in this database. "
-                "The Doctor selector cannot contain a name until a doctor registration is saved. "
-                "Register the doctor first, then verify and activate the account in "
-                "Verification & Management."
-            )
-        else:
-            # Show every non-rejected doctor so the administrator can always
-            # see what is happening. Patient assignment itself is restricted
-            # to active + verified doctors below.
-            doctor_status_options = {
-                f"Dr. {d[1]} (ID {d[0]}) — Qualification: {d[2] or 'Unknown'} — Account: {d[3] or 'Unknown'}": d[0]
-                for d in non_rejected_doctors
-            }
-
-            if not doctor_status_options:
-                st.warning("All registered doctors are rejected. A patient cannot be assigned until a doctor is approved.")
-            elif not all_patients:
-                st.info("No patients are registered yet. Register a patient first.")
-            else:
-                assignment_patient_options = {
-                    f"{p[1]} ({p[2]}) — ID {p[0]}": p[0]
-                    for p in all_patients
-                }
-
-                # Only active + verified doctors are valid for the actual
-                # patient assignment. Pending/rejected doctors remain visible
-                # in the provider status area rather than making the whole
-                # assignment UI disappear.
-                valid_doctor_options = {
-                    f"Dr. {d[1]} (ID {d[0]})": d[0]
-                    for d in active_doctors
-                }
-
-                caretaker_options = {"Not assigned": None}
-                for c in all_caretakers:
-                    status = c[2] or "Unknown"
-                    caretaker_options[f"{c[1]} (ID {c[0]}) — {status}"] = c[0]
-
-                if not valid_doctor_options:
-                    st.info(
-                        "Patient assignment is waiting for a doctor to be both Verified and Active. "
-                        "Use Verification & Management above to approve the registered doctor."
-                    )
-                else:
-                    with st.form("admin_assignment_form_v3"):
-                        selected_patient_label = st.selectbox(
-                            "Patient",
-                            list(assignment_patient_options.keys()),
-                            key="admin_assign_patient_v3"
-                        )
-                        selected_doctor_label = st.selectbox(
-                            "Assign Doctor",
-                            list(valid_doctor_options.keys()),
-                            key="admin_assign_doctor_v3"
-                        )
-                        selected_caretaker_label = st.selectbox(
-                            "Assign Caretaker / Nurse",
-                            list(caretaker_options.keys()),
-                            key="admin_assign_caretaker_v3"
-                        )
-                        submitted_assignment = st.form_submit_button(
-                            "💾 Save Patient Assignment",
-                            type="primary",
-                            use_container_width=True
-                        )
-
-                    if submitted_assignment:
-                        pid = assignment_patient_options[selected_patient_label]
-                        did = valid_doctor_options[selected_doctor_label]
-                        cid = caretaker_options[selected_caretaker_label]
-
-                        # Re-check the provider immediately before saving so a
-                        # stale Streamlit page cannot create an invalid assignment.
-                        doctor_check = conn.execute(
-                            """
-                            SELECT id, qualification_status, account_status
-                            FROM users
-                            WHERE id=?
-                              AND LOWER(TRIM(COALESCE(role, '')))='doctor'
-                            """,
-                            (did,)
-                        ).fetchone()
-
-                        if not doctor_check:
-                            st.error("The selected doctor no longer exists. Refresh the page and try again.")
-                        elif str(doctor_check[1] or '').strip().lower() not in ('verified', 'not required'):
-                            st.error("The selected doctor is not qualification-verified yet.")
-                        elif str(doctor_check[2] or '').strip().lower() != 'active':
-                            st.error("The selected doctor is not active. Activate the account in Verification & Management.")
-                        elif cid is not None:
-                            caretaker_check = conn.execute(
-                                """
-                                SELECT id, account_status, doctor_id_for_caretaker
-                                FROM users
-                                WHERE id=?
-                                  AND LOWER(TRIM(COALESCE(role, '')))='caretaker'
-                                """,
-                                (cid,)
-                            ).fetchone()
-
-                            if not caretaker_check:
-                                st.error("The selected caretaker record no longer exists. Refresh the page and try again.")
-                            elif str(caretaker_check[1] or '').strip().lower() != 'active':
-                                st.error("Only an active caretaker/nurse can be assigned to a patient.")
-                            elif caretaker_check[2] != did:
-                                st.error(
-                                    "This caretaker/nurse is not linked to the selected doctor yet. "
-                                    "Use the Caretaker → Doctor section below first."
-                                )
-                            else:
-                                conn.execute(
-                                    """
-                                    UPDATE users
-                                    SET doctor_id=?, caretaker_id=?
-                                    WHERE id=?
-                                      AND LOWER(TRIM(COALESCE(role, '')))='patient'
-                                    """,
-                                    (did, cid, pid)
-                                )
-                                conn.commit()
-                                st.success("Patient assigned successfully to the selected doctor and caretaker.")
-                                st.rerun()
-                        else:
-                            conn.execute(
-                                """
-                                UPDATE users
-                                SET doctor_id=?, caretaker_id=NULL
-                                WHERE id=?
-                                  AND LOWER(TRIM(COALESCE(role, '')))='patient'
-                                """,
-                                (did, pid)
-                            )
-                            conn.commit()
-                            st.success("Patient assigned successfully to the selected doctor.")
-                            st.rerun()
-
-        # --------------------------------------------------------
-        # CARETAKER / NURSE -> DOCTOR ASSIGNMENT
-        # --------------------------------------------------------
-        st.divider()
-        st.subheader("🤝 Assign Caretaker / Nurse to Doctor")
-        st.caption(
-            "This control is independent of patient assignment. It remains visible whenever provider records "
-            "exist, even when a doctor is still awaiting verification. Rejected accounts cannot be linked."
-        )
-
-        if not non_rejected_doctors:
-            if all_doctors:
-                st.warning("All registered doctors are rejected. Register or approve another doctor before linking a caretaker.")
-            else:
-                st.info(
-                    "No doctor account is currently stored in the database. "
-                    "Register a doctor first; this assignment control will then show the doctor automatically."
-                )
-        elif not all_caretakers:
-            st.info(
-                "No caretaker/nurse account is currently available. Register a caretaker first; "
-                "this assignment control will then show the caretaker automatically."
-            )
-        else:
-            ct_opts = {
-                f"{c[1]} (ID {c[0]}) — {c[2] or 'Unknown status'}": c[0]
-                for c in all_caretakers
-            }
-            doc_opts = {
-                f"Dr. {d[1]} (ID {d[0]}) — Qualification: {d[2] or 'Unknown'} — Account: {d[3] or 'Unknown'}": d[0]
-                for d in non_rejected_doctors
-            }
-
-            with st.form("admin_caretaker_doctor_form_v3"):
-                ct_label = st.selectbox(
-                    "Caretaker / Nurse",
-                    list(ct_opts.keys()),
-                    key="admin_ct_doctor_ct_v3"
-                )
-                dr_label = st.selectbox(
-                    "Doctor",
-                    list(doc_opts.keys()),
-                    key="admin_ct_doctor_dr_v3"
-                )
-                save_ct = st.form_submit_button(
-                    "🔗 Assign Caretaker to Doctor",
-                    type="primary",
-                    use_container_width=True
-                )
-
-            if save_ct:
-                caretaker_id = ct_opts[ct_label]
-                doctor_id = doc_opts[dr_label]
-
-                doctor_check = conn.execute(
-                    """
-                    SELECT id, qualification_status, account_status
-                    FROM users
-                    WHERE id=?
-                      AND LOWER(TRIM(COALESCE(role, '')))='doctor'
-                    """,
-                    (doctor_id,)
-                ).fetchone()
-                caretaker_check = conn.execute(
-                    """
-                    SELECT id, account_status
-                    FROM users
-                    WHERE id=?
-                      AND LOWER(TRIM(COALESCE(role, '')))='caretaker'
-                    """,
-                    (caretaker_id,)
-                ).fetchone()
-
-                if not doctor_check:
-                    st.error("The selected doctor record no longer exists. Refresh and try again.")
-                elif str(doctor_check[1] or '').strip().lower() == 'rejected' or str(doctor_check[2] or '').strip().lower() == 'rejected':
-                    st.error("A rejected doctor cannot be assigned to a caretaker.")
-                elif not caretaker_check:
-                    st.error("The selected caretaker record no longer exists. Refresh and try again.")
-                elif str(caretaker_check[1] or '').strip().lower() != 'active':
-                    st.error("Only an active caretaker/nurse can be assigned.")
-                else:
-                    conn.execute(
-                        """
-                        UPDATE users
-                        SET doctor_id_for_caretaker=?
-                        WHERE id=?
-                          AND LOWER(TRIM(COALESCE(role, '')))='caretaker'
-                        """,
-                        (doctor_id, caretaker_id)
-                    )
-                    conn.commit()
-                    st.success("Caretaker / nurse assigned to doctor successfully.")
-                    st.rerun()
-
-        # --------------------------------------------------------
-        # CURRENT ASSIGNMENT VIEW
-        # --------------------------------------------------------
-        assignment_view = conn.execute(
+        relationship_rows = conn.execute(
             """
             SELECT
                 p.name,
+                p.username,
                 d.name,
                 c.name
             FROM users p
@@ -4544,24 +4225,32 @@ if role == "admin":
             """
         ).fetchall()
 
-        if assignment_view:
-            st.markdown("### 📋 Current Patient Assignments")
+        st.markdown("### 📋 Current Patient Relationships")
+        if relationship_rows:
             st.dataframe(
                 [
                     {
-                        "Patient": r[0],
-                        "Doctor": ('Dr. ' + r[1]) if r[1] else 'Not assigned',
-                        "Caretaker/Nurse": r[2] or 'Not assigned'
+                        "Patient": row[0],
+                        "Username": row[1],
+                        "Doctor": f"Dr. {row[2]}" if row[2] else "Not linked",
+                        "Caretaker / Nurse": row[3] or "Not linked"
                     }
-                    for r in assignment_view
+                    for row in relationship_rows
                 ],
                 use_container_width=True,
                 hide_index=True
             )
+        else:
+            st.info("No patient relationships have been created yet.")
 
-        caretaker_assignment_view = conn.execute(
+        caretaker_relationships = conn.execute(
             """
-            SELECT c.name, d.name, d.qualification_status, d.account_status
+            SELECT
+                c.name,
+                c.username,
+                d.name,
+                d.qualification_status,
+                d.account_status
             FROM users c
             LEFT JOIN users d
               ON d.id=c.doctor_id_for_caretaker
@@ -4571,22 +4260,24 @@ if role == "admin":
             """
         ).fetchall()
 
-        if caretaker_assignment_view:
-            st.markdown("### 🔗 Current Caretaker → Doctor Assignments")
+        st.markdown("### 🔗 Current Caretaker / Nurse → Doctor Relationships")
+        if caretaker_relationships:
             st.dataframe(
                 [
                     {
-                        "Caretaker / Nurse": r[0],
-                        "Doctor": ('Dr. ' + r[1]) if r[1] else 'Not assigned',
-                        "Doctor Qualification": r[2] or "N/A",
-                        "Doctor Account": r[3] or "N/A"
+                        "Caretaker / Nurse": row[0],
+                        "Username": row[1],
+                        "Doctor": f"Dr. {row[2]}" if row[2] else "Not linked",
+                        "Doctor Qualification": row[3] or "N/A",
+                        "Doctor Account": row[4] or "N/A"
                     }
-                    for r in caretaker_assignment_view
+                    for row in caretaker_relationships
                 ],
                 use_container_width=True,
                 hide_index=True
             )
-
+        else:
+            st.info("No caretaker / nurse relationships have been created yet.")
 
     # ========================================================
     # ALL SESSIONS
@@ -4720,7 +4411,7 @@ if role == "doctor":
     doctor_tabs = st.tabs(
         [
             "🏠 Overview",
-            "🔗 Assignment Status",
+            "📝 Register Patient / Caretaker",
             "👥 My Patients",
             "📊 Patient Performance",
             "📄 Send Report",
@@ -4760,7 +4451,7 @@ if role == "doctor":
         )
 
         st.info(
-            "Patients are registered separately and are assigned to you only by the administrator."
+            "You can register patients directly from the Register Patient / Caretaker tab. Patients you register are automatically linked to your account."
         )
 
         st.warning(
@@ -4768,13 +4459,211 @@ if role == "doctor":
         )
 
     # ========================================================
-    # ADMIN-CONTROLLED PATIENT ASSIGNMENT
+    # DOCTOR REGISTRATION OF PATIENTS / CARETAKERS
     # ========================================================
 
     with doctor_tabs[1]:
-        st.subheader("🔗 Patient Assignment")
-        st.info("Patient accounts and assignments are controlled by the administrator. You cannot create or reassign patients from the doctor portal.")
-        st.write(f"**Patients currently assigned to you:** {len(assigned_patients)}")
+        st.subheader("📝 Register Patient or Caretaker / Nurse")
+        st.info(
+            "You can create patient accounts and caretaker/nurse accounts directly from your doctor portal. "
+            "A patient registered here is automatically linked to you. "
+            "A caretaker/nurse registered here is automatically linked to you."
+        )
+
+        registration_type = st.radio(
+            "What would you like to register?",
+            ["👤 Patient", "🤝 Caretaker / Nurse"],
+            horizontal=True,
+            key="doctor_registration_type"
+        )
+
+        if registration_type == "👤 Patient":
+            with st.form("doctor_register_patient_form"):
+                dp_name = st.text_input("Patient Full Name", key="doctor_patient_name")
+                dp_username = st.text_input("Patient Username", key="doctor_patient_username")
+                dp_password = st.text_input("Password", type="password", key="doctor_patient_password")
+                dp_confirm = st.text_input("Confirm Password", type="password", key="doctor_patient_confirm")
+                dp_phone = st.text_input("Phone Number (optional)", key="doctor_patient_phone")
+                dp_email = st.text_input("Email ID (optional)", key="doctor_patient_email")
+                dp_location = st.text_input("Location (optional)", key="doctor_patient_location")
+                dp_dob = st.date_input(
+                    "Date of Birth",
+                    value=date(1990, 1, 1),
+                    min_value=date(1900, 1, 1),
+                    max_value=date.today(),
+                    key="doctor_patient_dob"
+                )
+                dp_photo = st.file_uploader(
+                    "Patient Photo (optional)",
+                    type=["png", "jpg", "jpeg"],
+                    key="doctor_patient_photo"
+                )
+                dp_language = st.selectbox(
+                    "Language",
+                    list(LANGUAGES.keys()),
+                    key="doctor_patient_language"
+                )
+
+                save_patient = st.form_submit_button(
+                    "👤 Create Patient Account",
+                    type="primary",
+                    use_container_width=True
+                )
+
+            if save_patient:
+                if not dp_name.strip():
+                    st.error("Please enter the patient's name.")
+                elif not dp_username.strip():
+                    st.error("Please enter a username.")
+                elif len(dp_password) < 6:
+                    st.error("Password must contain at least 6 characters.")
+                elif dp_password != dp_confirm:
+                    st.error("Passwords do not match.")
+                elif dp_phone.strip() and not phone_is_valid(dp_phone):
+                    st.error("Please enter a valid phone number.")
+                elif dp_email.strip() and not email_is_valid(dp_email):
+                    st.error("Please enter a valid email address.")
+                else:
+                    existing = conn.execute(
+                        "SELECT id FROM users WHERE LOWER(username)=LOWER(?)",
+                        (dp_username.strip(),)
+                    ).fetchone()
+
+                    if existing:
+                        st.error("Username already exists.")
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO users(
+                                name, username, password_hash, language, baseline,
+                                role, adaptive_difficulty, phone, email, location,
+                                date_of_birth, age, photo, doctor_id, caretaker_id,
+                                account_status, created_by_id, created_at
+                            )
+                            VALUES(
+                                ?, ?, ?, ?, 0, 'patient', 1, ?, ?, ?, ?, ?, ?, ?, NULL,
+                                'Active', ?, ?
+                            )
+                            """,
+                            (
+                                dp_name.strip(),
+                                dp_username.strip(),
+                                hash_password(dp_password),
+                                dp_language,
+                                dp_phone.strip(),
+                                dp_email.strip(),
+                                normalize_location(dp_location),
+                                dp_dob.isoformat(),
+                                calculate_age_from_dob(dp_dob),
+                                dp_photo.getvalue() if dp_photo else None,
+                                user_id,
+                                user_id,
+                                datetime.now().isoformat(timespec="seconds")
+                            )
+                        )
+                        conn.commit()
+                        st.success(
+                            f"Patient account created successfully and linked to Dr. {name}."
+                        )
+                        announce(
+                            f"Patient {dp_name.strip()} has been registered successfully.",
+                            dp_language
+                        )
+
+        else:
+            with st.form("doctor_register_caretaker_form"):
+                dc_name = st.text_input("Caretaker / Nurse Full Name", key="doctor_caretaker_name")
+                dc_username = st.text_input("Caretaker / Nurse Username", key="doctor_caretaker_username")
+                dc_password = st.text_input("Password", type="password", key="doctor_caretaker_password")
+                dc_confirm = st.text_input("Confirm Password", type="password", key="doctor_caretaker_confirm")
+                dc_phone = st.text_input("Phone Number", key="doctor_caretaker_phone")
+                dc_email = st.text_input("Email ID", key="doctor_caretaker_email")
+                dc_location = st.text_input("Location", key="doctor_caretaker_location")
+                dc_photo = st.file_uploader(
+                    "Caretaker / Nurse Photo",
+                    type=["png", "jpg", "jpeg"],
+                    key="doctor_caretaker_photo"
+                )
+                dc_relationship = st.text_input(
+                    "Relationship / Care Role",
+                    placeholder="Example: Family Caretaker, Home Care Assistant",
+                    key="doctor_caretaker_relationship"
+                )
+                dc_language = st.selectbox(
+                    "Language",
+                    list(LANGUAGES.keys()),
+                    key="doctor_caretaker_language"
+                )
+
+                save_caretaker = st.form_submit_button(
+                    "🤝 Create Caretaker / Nurse Account",
+                    type="primary",
+                    use_container_width=True
+                )
+
+            if save_caretaker:
+                if not dc_name.strip():
+                    st.error("Please enter the caretaker's name.")
+                elif not dc_username.strip():
+                    st.error("Please enter a username.")
+                elif len(dc_password) < 6:
+                    st.error("Password must contain at least 6 characters.")
+                elif dc_password != dc_confirm:
+                    st.error("Passwords do not match.")
+                elif not phone_is_valid(dc_phone):
+                    st.error("Please enter a valid phone number.")
+                elif not email_is_valid(dc_email):
+                    st.error("Please enter a valid email address.")
+                elif not normalize_location(dc_location):
+                    st.error("Please enter the caretaker's location.")
+                elif dc_photo is None:
+                    st.error("Please upload the caretaker/nurse photo.")
+                else:
+                    existing = conn.execute(
+                        "SELECT id FROM users WHERE LOWER(username)=LOWER(?)",
+                        (dc_username.strip(),)
+                    ).fetchone()
+
+                    if existing:
+                        st.error("Username already exists.")
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO users(
+                                name, username, password_hash, language, baseline,
+                                role, adaptive_difficulty, phone, email, location,
+                                photo, qualification, qualification_status,
+                                account_status, doctor_id_for_caretaker,
+                                created_by_id, created_at
+                            )
+                            VALUES(
+                                ?, ?, ?, ?, 0, 'caretaker', 1, ?, ?, ?, ?, ?,
+                                'Not Required', 'Active', ?, ?, ?
+                            )
+                            """,
+                            (
+                                dc_name.strip(),
+                                dc_username.strip(),
+                                hash_password(dc_password),
+                                dc_language,
+                                dc_phone.strip(),
+                                dc_email.strip(),
+                                normalize_location(dc_location),
+                                dc_photo.getvalue(),
+                                dc_relationship.strip(),
+                                user_id,
+                                user_id,
+                                datetime.now().isoformat(timespec="seconds")
+                            )
+                        )
+                        conn.commit()
+                        st.success(
+                            f"Caretaker / nurse account created successfully and linked to Dr. {name}."
+                        )
+                        announce(
+                            f"Caretaker {dc_name.strip()} has been registered successfully.",
+                            dc_language
+                        )
 
     # ========================================================
     # DOCTOR OWN PATIENTS
@@ -5098,6 +4987,7 @@ if role == "caretaker":
     caretaker_tabs = st.tabs(
         [
             "🏠 Overview",
+            "📝 Register Patient",
             "👥 My Patients",
             "📊 Patient Performance",
             "🔔 Patient Reminders",
@@ -5132,13 +5022,138 @@ if role == "caretaker":
         if caretaker_profile and caretaker_profile[6]:
             assigned_doctor = conn.execute("SELECT name FROM users WHERE id=? AND role='doctor'", (caretaker_profile[6],)).fetchone()
         st.info(
-            f"Assigned doctor: **Dr. {assigned_doctor[0]}**" if assigned_doctor else "No doctor has been assigned yet. The administrator must assign you to a doctor first."
+            f"Assigned doctor: **Dr. {assigned_doctor[0]}**" if assigned_doctor else "No doctor relationship is currently linked to your account. A doctor can create your caretaker relationship from the doctor's registration portal."
         )
         st.warning(
             "🎮 Cognitive games are available only to patient accounts."
         )
 
     with caretaker_tabs[1]:
+        st.subheader("📝 Register Patient")
+        st.info(
+            "You can create patient accounts directly from your caretaker portal. "
+            "The new patient is automatically linked to your caretaker account. "
+            "If your caretaker account is linked to a doctor, the patient is also automatically linked to that doctor."
+        )
+
+        linked_doctor = None
+        if caretaker_profile and caretaker_profile[6]:
+            linked_doctor = conn.execute(
+                """
+                SELECT id, name
+                FROM users
+                WHERE id=? AND role='doctor'
+                """,
+                (caretaker_profile[6],)
+            ).fetchone()
+
+        if not linked_doctor:
+            st.warning(
+                "Your caretaker account is not currently linked to a doctor. "
+                "You may still register a patient, but the patient will remain linked only to you until a doctor relationship exists."
+            )
+
+        with st.form("caretaker_register_patient_form"):
+            cp_name = st.text_input("Patient Full Name", key="caretaker_patient_name")
+            cp_username = st.text_input("Patient Username", key="caretaker_patient_username")
+            cp_password = st.text_input("Password", type="password", key="caretaker_patient_password")
+            cp_confirm = st.text_input("Confirm Password", type="password", key="caretaker_patient_confirm")
+            cp_phone = st.text_input("Phone Number (optional)", key="caretaker_patient_phone")
+            cp_email = st.text_input("Email ID (optional)", key="caretaker_patient_email")
+            cp_location = st.text_input("Location (optional)", key="caretaker_patient_location")
+            cp_dob = st.date_input(
+                "Date of Birth",
+                value=date(1990, 1, 1),
+                min_value=date(1900, 1, 1),
+                max_value=date.today(),
+                key="caretaker_patient_dob"
+            )
+            cp_photo = st.file_uploader(
+                "Patient Photo (optional)",
+                type=["png", "jpg", "jpeg"],
+                key="caretaker_patient_photo"
+            )
+            cp_language = st.selectbox(
+                "Language",
+                list(LANGUAGES.keys()),
+                key="caretaker_patient_language"
+            )
+
+            save_caretaker_patient = st.form_submit_button(
+                "👤 Create Patient Account",
+                type="primary",
+                use_container_width=True
+            )
+
+        if save_caretaker_patient:
+            if not cp_name.strip():
+                st.error("Please enter the patient's name.")
+            elif not cp_username.strip():
+                st.error("Please enter a username.")
+            elif len(cp_password) < 6:
+                st.error("Password must contain at least 6 characters.")
+            elif cp_password != cp_confirm:
+                st.error("Passwords do not match.")
+            elif cp_phone.strip() and not phone_is_valid(cp_phone):
+                st.error("Please enter a valid phone number.")
+            elif cp_email.strip() and not email_is_valid(cp_email):
+                st.error("Please enter a valid email address.")
+            else:
+                existing = conn.execute(
+                    "SELECT id FROM users WHERE LOWER(username)=LOWER(?)",
+                    (cp_username.strip(),)
+                ).fetchone()
+
+                if existing:
+                    st.error("Username already exists.")
+                else:
+                    doctor_id_for_patient = linked_doctor[0] if linked_doctor else None
+                    conn.execute(
+                        """
+                        INSERT INTO users(
+                            name, username, password_hash, language, baseline,
+                            role, adaptive_difficulty, phone, email, location,
+                            date_of_birth, age, photo, doctor_id, caretaker_id,
+                            account_status, created_by_id, created_at
+                        )
+                        VALUES(
+                            ?, ?, ?, ?, 0, 'patient', 1, ?, ?, ?, ?, ?, ?, ?, ?,
+                            'Active', ?, ?
+                        )
+                        """,
+                        (
+                            cp_name.strip(),
+                            cp_username.strip(),
+                            hash_password(cp_password),
+                            cp_language,
+                            cp_phone.strip(),
+                            cp_email.strip(),
+                            normalize_location(cp_location),
+                            cp_dob.isoformat(),
+                            calculate_age_from_dob(cp_dob),
+                            cp_photo.getvalue() if cp_photo else None,
+                            doctor_id_for_patient,
+                            user_id,
+                            user_id,
+                            datetime.now().isoformat(timespec="seconds")
+                        )
+                    )
+                    conn.commit()
+                    if linked_doctor:
+                        success_message = (
+                            f"Patient account created successfully and linked to you and Dr. {linked_doctor[1]}."
+                        )
+                    else:
+                        success_message = (
+                            "Patient account created successfully and linked to your caretaker account."
+                        )
+                    st.success(success_message)
+                    announce(
+                        f"Patient {cp_name.strip()} has been registered successfully.",
+                        cp_language
+                    )
+
+    with caretaker_tabs[2]:
 
         if own_patients:
             st.dataframe(
@@ -5162,7 +5177,7 @@ if role == "caretaker":
         else:
             st.info("No patients have been added to your caretaker account yet.")
 
-    with caretaker_tabs[2]:
+    with caretaker_tabs[3]:
 
         if own_patients:
 
@@ -5249,7 +5264,7 @@ if role == "caretaker":
                     else:
                         st.info("No game sessions recorded.")
 
-    with caretaker_tabs[3]:
+    with caretaker_tabs[4]:
 
         if own_patients:
             patient_map = {
@@ -5294,7 +5309,7 @@ if role == "caretaker":
                 else:
                     st.info("No reminders recorded for this patient.")
 
-    with caretaker_tabs[4]:
+    with caretaker_tabs[5]:
 
         st.subheader("📜 Treatment Certificates")
         certs = conn.execute(
@@ -5311,7 +5326,7 @@ if role == "caretaker":
         else:
             st.info("No treatment certificates available for your assigned patients.")
 
-    with caretaker_tabs[5]:
+    with caretaker_tabs[6]:
 
         st.write(f"**Phone:** {caretaker_profile[0] if caretaker_profile else ''}")
         st.write(f"**Email:** {caretaker_profile[1] if caretaker_profile else ''}")
