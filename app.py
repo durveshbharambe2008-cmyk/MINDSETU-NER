@@ -1054,51 +1054,21 @@ def _prepare_postgres_url(url):
     return url
 
 
+import psycopg2
+import streamlit as st
+
+
 @st.cache_resource
 def get_connection():
-    urls = _read_database_urls()
-    errors = []
+    connection = psycopg2.connect(st.secrets["DATABASE_URL"])
+    connection.autocommit = False
 
-    for source_name, raw_url in urls:
-        url = _prepare_postgres_url(raw_url)
+    cur = connection.cursor()
 
-        try:
-            connection = PostgreSQLConnection(url)
-
-            # Verify that the connection is actually usable before returning it.
-            connection.execute("SELECT 1").fetchone()
-
-            # Keep the connection object alive while we create/migrate tables.
-            # The schema migration below must remain reachable on a fresh DB.
-            return _initialize_postgres_schema(connection)
-
-        except psycopg2.OperationalError as exc:
-            # Never display the URL/password. Store only a safe summary.
-            message = str(exc).splitlines()[0] if str(exc) else "connection failed"
-            errors.append(f"{source_name}: {message}")
-
-        except Exception:
-            # Do not expose database credentials or full internal tracebacks.
-            errors.append(f"{source_name}: database initialization failed")
-
-    # This error is intentionally actionable but contains no secrets.
-    raise RuntimeError(
-        "SMRITISETU could not connect to PostgreSQL. "
-        "For Supabase on Streamlit Cloud, use the Session Pooler connection "
-        "(port 5432) in Streamlit Secrets. Also verify that the database "
-        "password is current. The database URL/password is not printed here "
-        "for security."
-    )
-
-
-def _initialize_postgres_schema(connection):
-
-    # --------------------------------------------------------
-    # KEEP ORIGINAL USERS TABLE + ADD PROVIDER ONBOARDING FIELDS
-    # --------------------------------------------------------
-    connection.execute("""
+    # Users Table
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id BIGSERIAL PRIMARY KEY,
+            id SERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
@@ -1127,53 +1097,67 @@ def _initialize_postgres_schema(connection):
         )
     """)
 
-    connection.execute("""
+    # Sessions Table
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
-            id BIGSERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            game TEXT NOT NULL,
-            score REAL NOT NULL,
-            difficulty INTEGER DEFAULT 1,
-            created_at TEXT NOT NULL
+            id SERIAL PRIMARY KEY,
+            patient_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            doctor_id INTEGER,
+            session_type TEXT DEFAULT '',
+            score REAL DEFAULT 0,
+            difficulty_level INTEGER DEFAULT 1,
+            duration_seconds INTEGER DEFAULT 0,
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT ''
         )
     """)
 
-    connection.execute("""
+    # Reminders Table
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS reminders (
-            id BIGSERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
             title TEXT NOT NULL,
-            due_time TEXT NOT NULL,
-            status TEXT DEFAULT 'Pending'
+            description TEXT DEFAULT '',
+            reminder_time TEXT DEFAULT '',
+            frequency TEXT DEFAULT 'Once',
+            status TEXT DEFAULT 'Pending',
+            created_by_id INTEGER,
+            created_at TEXT DEFAULT ''
         )
     """)
 
-    connection.execute("""
+    # Reports Table
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS reports (
-            id BIGSERIAL PRIMARY KEY,
-            patient_id INTEGER NOT NULL,
-            doctor_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            patient_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            doctor_id INTEGER,
             title TEXT NOT NULL,
-            report_text TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            status TEXT DEFAULT 'Sent'
+            description TEXT DEFAULT '',
+            report_data BYTEA,
+            file_name TEXT DEFAULT '',
+            created_at TEXT DEFAULT ''
         )
     """)
 
-    connection.execute("""
+    # Treatment Certificates Table
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS treatment_certificates (
-            id BIGSERIAL PRIMARY KEY,
-            certificate_no TEXT UNIQUE NOT NULL,
-            patient_id INTEGER NOT NULL,
-            doctor_id INTEGER NOT NULL,
-            caretaker_id INTEGER,
-            treatment_title TEXT NOT NULL,
-            treatment_summary TEXT NOT NULL,
-            treatment_start TEXT NOT NULL,
-            treatment_end TEXT NOT NULL,
-            issued_at TEXT NOT NULL
+            id SERIAL PRIMARY KEY,
+            patient_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            doctor_id INTEGER,
+            certificate_title TEXT NOT NULL,
+            certificate_document BYTEA,
+            issue_date TEXT DEFAULT '',
+            status TEXT DEFAULT 'Active',
+            created_at TEXT DEFAULT ''
         )
     """)
+
+    connection.commit()
+    cur.close()
+    return connection
 
     # --------------------------------------------------------
     # SAFE MIGRATION FOR EXISTING DATABASES
