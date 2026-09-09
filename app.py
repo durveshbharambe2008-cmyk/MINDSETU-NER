@@ -925,23 +925,40 @@ def build_patient_progress_pdf(patient_id):
 # ============================================================
 
 # ============================================================
-# SUPABASE POSTGRESQL DATABASE
+# DATABASE - SUPABASE POSTGRESQL WITH SAFE SQLITE FALLBACK
 # ============================================================
-# Database credentials MUST be stored in Streamlit Secrets, not in GitHub.
-# In Streamlit Cloud add:
+#
+# Streamlit Cloud can use Supabase/PostgreSQL when the connection
+# secret is configured. If the secret is missing or the database is
+# temporarily unreachable, the app falls back to a local SQLite DB
+# instead of crashing at startup.
+#
+# Recommended Streamlit Cloud secret:
 # [connections.postgresql]
-# url = "postgresql://postgres:YOUR_NEW_PASSWORD@db.tqyvuasildvwhtomznfd.supabase.co:5432/postgres?sslmode=require"
+# url = "postgresql://postgres:YOUR_PASSWORD@...:5432/postgres?sslmode=require"
+#
+# Optional secrets:
+# SUPABASE_POOLER_URL = "..."
+# SUPABASE_DB_URL = "..."
+# DATABASE_URL = "..."
+#
+# IMPORTANT: SQLite is only a fallback on Streamlit Cloud. Its data may
+# be lost when the app/container is recreated. For permanent production
+# data, configure the Supabase Session Pooler URL in Streamlit Secrets.
+# ============================================================
 
 import psycopg2
 
 
-class PostgreSQLConnection:
-    """Small compatibility wrapper for the existing SMRITISETU SQL code.
+# Local SQLite fallback location.
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_NAME = str(DATA_DIR / "mindsetu_ner.db")
 
-    The application was originally written with SQLite-style '?' placeholders.
-    PostgreSQL/psycopg2 uses '%s', so the wrapper converts those placeholders
-    while keeping the rest of the application unchanged.
-    """
+
+class PostgreSQLConnection:
+    """Compatibility wrapper for the existing SMRITISETU SQL code."""
 
     def __init__(self, url):
         self.connection = psycopg2.connect(
@@ -957,8 +974,6 @@ class PostgreSQLConnection:
 
     @staticmethod
     def _convert_placeholders(sql):
-        # Existing SMRITISETU queries use SQLite's ? placeholders.
-        # psycopg2 uses %s, so convert them before execution.
         return sql.replace("?", "%s")
 
     def execute(self, sql, params=None):
@@ -981,24 +996,9 @@ class PostgreSQLConnection:
 
 
 def _read_database_urls():
-    """Read database URLs from Streamlit Secrets without exposing them.
-
-    Recommended:
-        [connections.postgresql]
-        url = "SUPABASE SESSION POOLER URI"
-
-    Optional fallback:
-        SUPABASE_POOLER_URL = "SUPABASE SESSION POOLER URI"
-        SUPABASE_DB_URL = "SUPABASE DATABASE URI"
-        DATABASE_URL = "POSTGRESQL URI"
-
-    The pooler URL is preferred because Streamlit Community Cloud may run
-    from an IPv4-only network while Supabase direct database connections can
-    prefer IPv6.
-    """
+    """Read PostgreSQL URLs from Streamlit Secrets without exposing them."""
     urls = []
 
-    # 1) Recommended Streamlit connection secret.
     try:
         value = st.secrets["connections"]["postgresql"]["url"]
         if value:
@@ -1006,7 +1006,6 @@ def _read_database_urls():
     except Exception:
         pass
 
-    # 2) Recommended explicit pooler fallback.
     for key in ("SUPABASE_POOLER_URL", "SUPABASE_DB_URL", "DATABASE_URL"):
         try:
             value = st.secrets[key]
@@ -1015,7 +1014,6 @@ def _read_database_urls():
         except Exception:
             pass
 
-    # Remove duplicate URLs while preserving priority order.
     unique = []
     seen = set()
     for name, value in urls:
@@ -1023,17 +1021,8 @@ def _read_database_urls():
             unique.append((name, value))
             seen.add(value)
 
-    if not unique:
-        raise RuntimeError(
-            "PostgreSQL connection secret is missing. In Streamlit Cloud, "
-            "add [connections.postgresql] with a Supabase Session Pooler URL "
-            "under Settings → Secrets."
-        )
-
-    # If an explicit SUPABASE_POOLER_URL exists, prefer it over a direct URL.
-    explicit_pooler = [
-        item for item in unique if item[0] == "SUPABASE_POOLER_URL"
-    ]
+    # No secret is NOT a fatal error anymore. SQLite will be used instead.
+    explicit_pooler = [item for item in unique if item[0] == "SUPABASE_POOLER_URL"]
     if explicit_pooler:
         others = [item for item in unique if item[0] != "SUPABASE_POOLER_URL"]
         unique = explicit_pooler + others
@@ -1046,29 +1035,222 @@ def _prepare_postgres_url(url):
     url = str(url).strip()
     if not url:
         return url
-
-    lower_url = url.lower()
-    if "sslmode=" not in lower_url:
+    if "sslmode=" not in url.lower():
         separator = "&" if "?" in url else "?"
         url = f"{url}{separator}sslmode=require"
     return url
 
 
-import psycopg2
-import streamlit as st
+def _get_sqlite_connection():
+
+    connection = sqlite3.connect(
+        DB_NAME,
+        check_same_thread=False
+    )
+
+    connection.execute("PRAGMA foreign_keys = ON")
+    # Performance/reliability settings for SQLite under Streamlit reruns.
+    connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA synchronous = NORMAL")
+    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute("PRAGMA temp_store = MEMORY")
+
+    # --------------------------------------------------------
+    # KEEP ORIGINAL USERS TABLE + ADD PROVIDER ONBOARDING FIELDS
+    # --------------------------------------------------------
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            language TEXT DEFAULT 'English',
+            baseline REAL DEFAULT 0,
+            role TEXT DEFAULT 'patient',
+            doctor_id INTEGER,
+            adaptive_difficulty INTEGER DEFAULT 1,
+            caretaker_id INTEGER,
+            doctor_id_for_caretaker INTEGER,
+            date_of_birth TEXT DEFAULT '',
+            age INTEGER DEFAULT 0,
+            photo BLOB,
+            id_card_number TEXT DEFAULT '',
+            id_card_created_at TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            email TEXT DEFAULT '',
+            location TEXT DEFAULT '',
+            qualification TEXT DEFAULT '',
+            qualification_number TEXT DEFAULT '',
+            qualification_document TEXT DEFAULT '',
+            qualification_status TEXT DEFAULT 'Not Required',
+            account_status TEXT DEFAULT 'Active',
+            created_by_id INTEGER,
+            created_at TEXT DEFAULT ''
+        )
+    """)
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            game TEXT NOT NULL,
+            score REAL NOT NULL,
+            difficulty INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS reminders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            due_time TEXT NOT NULL,
+            status TEXT DEFAULT 'Pending'
+        )
+    """)
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient_id INTEGER NOT NULL,
+            doctor_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            report_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            status TEXT DEFAULT 'Sent'
+        )
+    """)
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS treatment_certificates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            certificate_no TEXT UNIQUE NOT NULL,
+            patient_id INTEGER NOT NULL,
+            doctor_id INTEGER NOT NULL,
+            caretaker_id INTEGER,
+            treatment_title TEXT NOT NULL,
+            treatment_summary TEXT NOT NULL,
+            treatment_start TEXT NOT NULL,
+            treatment_end TEXT NOT NULL,
+            issued_at TEXT NOT NULL
+        )
+    """)
+
+    # --------------------------------------------------------
+    # SAFE MIGRATION FOR EXISTING DATABASES
+    # --------------------------------------------------------
+    existing_columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(users)"
+        ).fetchall()
+    }
+
+    required_columns = {
+        "adaptive_difficulty": "INTEGER DEFAULT 1",
+        "caretaker_id": "INTEGER",
+        "doctor_id_for_caretaker": "INTEGER",
+        "date_of_birth": "TEXT DEFAULT ''",
+        "age": "INTEGER DEFAULT 0",
+        "photo": "BLOB",
+        "id_card_number": "TEXT DEFAULT ''",
+        "id_card_created_at": "TEXT DEFAULT ''",
+        "phone": "TEXT DEFAULT ''",
+        "email": "TEXT DEFAULT ''",
+        "location": "TEXT DEFAULT ''",
+        "qualification": "TEXT DEFAULT ''",
+        "qualification_number": "TEXT DEFAULT ''",
+        "qualification_document": "TEXT DEFAULT ''",
+        "qualification_status": "TEXT DEFAULT 'Not Required'",
+        "account_status": "TEXT DEFAULT 'Active'",
+        "created_by_id": "INTEGER",
+        "created_at": "TEXT DEFAULT ''",
+    }
+
+    for column_name, column_definition in required_columns.items():
+        if column_name not in existing_columns:
+            connection.execute(
+                f"ALTER TABLE users ADD COLUMN {column_name} {column_definition}"
+            )
+
+    # Older patient accounts should remain usable.
+    connection.execute("""
+        UPDATE users
+        SET account_status='Active'
+        WHERE account_status IS NULL OR TRIM(account_status)=''
+    """)
+
+    connection.execute("""
+        UPDATE users
+        SET qualification_status='Not Required'
+        WHERE qualification_status IS NULL OR TRIM(qualification_status)=''
+    """)
+
+    connection.execute("""
+        UPDATE users
+        SET created_at=datetime('now')
+        WHERE created_at IS NULL OR TRIM(created_at)=''
+    """)
+
+    # Index columns used frequently by login, dashboards and assignments.
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_users_doctor_id ON users(doctor_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_users_caretaker_id ON users(caretaker_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_reports_patient_id ON reports(patient_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_reports_doctor_id ON reports(doctor_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_reminders_user_id ON reminders(user_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_cert_patient_id ON treatment_certificates(patient_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_cert_doctor_id ON treatment_certificates(doctor_id)")
+
+    connection.commit()
+
+    return connection
 
 
 @st.cache_resource
 def get_connection():
-    connection = psycopg2.connect(st.secrets["DATABASE_URL"])
-    connection.autocommit = False
+    """Return a working PostgreSQL connection, or SQLite if PostgreSQL is unavailable."""
+    urls = _read_database_urls()
+    errors = []
 
-    cur = connection.cursor()
+    # 1) Prefer Supabase/PostgreSQL when configured.
+    for source_name, raw_url in urls:
+        url = _prepare_postgres_url(raw_url)
+        try:
+            connection = PostgreSQLConnection(url)
+            connection.execute("SELECT 1").fetchone()
+            return _initialize_postgres_schema(connection)
+        except psycopg2.OperationalError as exc:
+            message = str(exc).splitlines()[0] if str(exc) else "connection failed"
+            errors.append(f"{source_name}: {message}")
+        except Exception as exc:
+            message = str(exc).splitlines()[0] if str(exc) else "database initialization failed"
+            errors.append(f"{source_name}: {message}")
 
-    # Users Table
-    cur.execute("""
+    # 2) Safe fallback so Streamlit Cloud does not show a RuntimeError
+    # before the login screen. This also works when no Secrets are set.
+    try:
+        return _get_sqlite_connection()
+    except Exception as sqlite_exc:
+        # Keep the public error short and do not expose credentials.
+        raise RuntimeError(
+            "SMRITISETU could not initialize its database. "
+            "Please check the Streamlit Cloud logs and verify that the "
+            "Supabase Session Pooler secret is configured correctly."
+        ) from sqlite_exc
+
+
+def _initialize_postgres_schema(connection):
+
+    # --------------------------------------------------------
+    # KEEP ORIGINAL USERS TABLE + ADD PROVIDER ONBOARDING FIELDS
+    # --------------------------------------------------------
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
+            id BIGSERIAL PRIMARY KEY,
             name TEXT NOT NULL,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
@@ -1097,67 +1279,53 @@ def get_connection():
         )
     """)
 
-    # Sessions Table
-    cur.execute("""
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
-            id SERIAL PRIMARY KEY,
-            patient_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-            doctor_id INTEGER,
-            session_type TEXT DEFAULT '',
-            score REAL DEFAULT 0,
-            difficulty_level INTEGER DEFAULT 1,
-            duration_seconds INTEGER DEFAULT 0,
-            notes TEXT DEFAULT '',
-            created_at TEXT DEFAULT ''
+            id BIGSERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            game TEXT NOT NULL,
+            score REAL NOT NULL,
+            difficulty INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL
         )
     """)
 
-    # Reminders Table
-    cur.execute("""
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS reminders (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            id BIGSERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
             title TEXT NOT NULL,
-            description TEXT DEFAULT '',
-            reminder_time TEXT DEFAULT '',
-            frequency TEXT DEFAULT 'Once',
-            status TEXT DEFAULT 'Pending',
-            created_by_id INTEGER,
-            created_at TEXT DEFAULT ''
+            due_time TEXT NOT NULL,
+            status TEXT DEFAULT 'Pending'
         )
     """)
 
-    # Reports Table
-    cur.execute("""
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS reports (
-            id SERIAL PRIMARY KEY,
-            patient_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-            doctor_id INTEGER,
+            id BIGSERIAL PRIMARY KEY,
+            patient_id INTEGER NOT NULL,
+            doctor_id INTEGER NOT NULL,
             title TEXT NOT NULL,
-            description TEXT DEFAULT '',
-            report_data BYTEA,
-            file_name TEXT DEFAULT '',
-            created_at TEXT DEFAULT ''
+            report_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            status TEXT DEFAULT 'Sent'
         )
     """)
 
-    # Treatment Certificates Table
-    cur.execute("""
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS treatment_certificates (
-            id SERIAL PRIMARY KEY,
-            patient_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-            doctor_id INTEGER,
-            certificate_title TEXT NOT NULL,
-            certificate_document BYTEA,
-            issue_date TEXT DEFAULT '',
-            status TEXT DEFAULT 'Active',
-            created_at TEXT DEFAULT ''
+            id BIGSERIAL PRIMARY KEY,
+            certificate_no TEXT UNIQUE NOT NULL,
+            patient_id INTEGER NOT NULL,
+            doctor_id INTEGER NOT NULL,
+            caretaker_id INTEGER,
+            treatment_title TEXT NOT NULL,
+            treatment_summary TEXT NOT NULL,
+            treatment_start TEXT NOT NULL,
+            treatment_end TEXT NOT NULL,
+            issued_at TEXT NOT NULL
         )
     """)
-
-    connection.commit()
-    cur.close()
-    return connection
 
     # --------------------------------------------------------
     # SAFE MIGRATION FOR EXISTING DATABASES
