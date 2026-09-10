@@ -205,8 +205,6 @@ try:
             footer {{ visibility: hidden; }}
             [data-testid="stToolbar"] {{ visibility: hidden !important; }}
             [data-testid="stDecoration"] {{ visibility: hidden !important; }}
-            [data-testid="stStatusWidget"] { visibility: hidden !important; display: none !important; }
-            .stStatusWidget { visibility: hidden !important; display: none !important; }
             .smritisetu-fixed-logo {{
                 position: fixed;
                 top: 8px;
